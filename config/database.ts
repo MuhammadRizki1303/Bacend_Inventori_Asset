@@ -41,7 +41,6 @@ export const testConnection = async (): Promise<boolean> => {
   }
 };
 
-// Buat tabel jika belum ada (tanpa retry logic yang kompleks)
 export const initDatabase = async (): Promise<void> => {
   const isConnected = await testConnection();
   if (!isConnected) {
@@ -54,7 +53,18 @@ export const initDatabase = async (): Promise<void> => {
     conn = await pool.getConnection();
     console.log('🔄 Creating/verifying tables...');
 
-    // Buat tabel users
+    // FIX: Drop table jika sudah ada (UNTUK DEVELOPMENT)
+    if (process.env.NODE_ENV === 'development') {
+      console.log('🗑️  Dropping existing users table for recreation...');
+      try {
+        await conn.query('DROP TABLE IF EXISTS users');
+        console.log('✅ Old users table dropped');
+      } catch (dropError) {
+        console.log('ℹ️  No users table to drop');
+      }
+    }
+
+    // Buat tabel users dengan AUTO_INCREMENT yang benar
     await conn.query(`
       CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -66,8 +76,11 @@ export const initDatabase = async (): Promise<void> => {
         status VARCHAR(20) DEFAULT 'Active',
         department VARCHAR(100),
         email_verified BOOLEAN DEFAULT FALSE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
+        verification_token VARCHAR(255),
+        token_expiry TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
     console.log('✅ users table ready');
 
@@ -82,7 +95,8 @@ export const initDatabase = async (): Promise<void> => {
         value DECIMAL(10,2) DEFAULT 0.00,
         location VARCHAR(255),
         description TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
       )
     `);
     console.log('✅ assets table ready');
@@ -92,15 +106,31 @@ export const initDatabase = async (): Promise<void> => {
     if (users[0].count === 0) {
       const hashedPassword = await bcrypt.hash('admin123', 10);
       await conn.query(`
-        INSERT INTO users (name, email, password, role, email_verified, status) 
-        VALUES ('Administrator', 'admin@example.com', ?, 'Admin', TRUE, 'Active')
+        INSERT INTO users (name, email, password, role, status) 
+        VALUES ('Administrator', 'admin@example.com', ?, 'Admin', 'Active')
       `, [hashedPassword]);
       console.log('✅ Admin user created');
+    }
+
+    // FIX: Test insert data dummy untuk verifikasi AUTO_INCREMENT bekerja
+    console.log('🧪 Testing AUTO_INCREMENT...');
+    try {
+      const [testResult]: any = await conn.query(`
+        INSERT INTO users (name, email, password) 
+        VALUES ('Test User', 'test@example.com', 'dummy')
+      `);
+      console.log('✅ AUTO_INCREMENT test passed, inserted ID:', testResult.insertId);
+      
+      // Hapus data test
+      await conn.query('DELETE FROM users WHERE email = ?', ['test@example.com']);
+    } catch (testError: any) {
+      console.error('❌ AUTO_INCREMENT test failed:', testError.message);
     }
 
     console.log('🎉 Database initialization complete');
   } catch (error: any) {
     console.error('❌ Database initialization error:', error.message);
+    console.error('Full error:', error);
   } finally {
     if (conn) conn.release();
   }
