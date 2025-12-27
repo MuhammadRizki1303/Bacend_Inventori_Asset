@@ -1,0 +1,135 @@
+### auth-test.http
+@baseUrl = https://bacendinventoriasser-production.up.railway.app
+@contentType = application/json
+
+### 1. Health Check
+GET {{baseUrl}}/health
+
+### 2. Test Auth Routes
+GET {{baseUrl}}/api/auth/test
+
+### 3. Debug Users (Lihat user yang ada)
+GET {{baseUrl}}/api/debug/users
+
+### 4. Create Admin User (Jika belum ada)
+POST {{baseUrl}}/api/debug/create-admin
+Content-Type: {{contentType}}
+
+{}
+
+### 5. Register New User
+# @name register
+POST {{baseUrl}}/api/auth/register
+Content-Type: {{contentType}}
+
+{
+  "name": "Test User",
+  "email": "test{{$timestamp}}@example.com",
+  "password": "password123",
+  "phone": "08123456789",
+  "department": "IT"
+}
+
+### 6. Login dengan User Baru
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "test{{$timestamp}}@example.com",
+  "password": "password123"
+}
+
+### 7. Login dengan Admin
+# @name adminLogin
+POST {{baseUrl}}/api/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "admin@example.com",
+  "password": "admin123"
+}
+
+### 8. Simpan token dari login
+@authToken = {{login.response.body.token}}
+
+### 9. Test Protected Route dengan Token
+GET {{baseUrl}}/api/debug/auth
+Authorization: Bearer {{authToken}}
+
+### 10. Resend Verification Email
+POST {{baseUrl}}/api/auth/resend-verification
+Content-Type: {{contentType}}
+
+{
+  "email": "test@example.com"
+}
+
+### 11. Check Verification Status
+POST {{baseUrl}}/api/auth/check-verification
+Content-Type: {{contentType}}
+
+{
+  "email": "test@example.com"
+}
+
+### 12. Verify Email (POST method)
+POST {{baseUrl}}/api/auth/verify-email
+Content-Type: {{contentType}}
+
+{
+  "token": "verification-token-here"
+}
+
+### 13. Verify Email (GET method - untuk link email)
+GET {{baseUrl}}/api/auth/verify-email?token=verification-token-here
+
+### 14. Logout
+POST {{baseUrl}}/api/auth/logout
+Authorization: Bearer {{authToken}}
+Content-Type: {{contentType}}
+
+### 15. Test Error Cases
+
+### 15.1 Register dengan email yang sudah ada
+POST {{baseUrl}}/api/auth/register
+Content-Type: {{contentType}}
+
+{
+  "name": "Duplicate User",
+  "email": "admin@example.com",
+  "password": "password123"
+}
+
+### 15.2 Login dengan password salah
+POST {{baseUrl}}/api/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "admin@example.com",
+  "password": "wrongpassword"
+}
+
+### 15.3 Login dengan email tidak ada
+POST {{baseUrl}}/api/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "nonexistent@example.com",
+  "password": "password123"
+}
+
+### 15.4 Register tanpa required fields
+POST {{baseUrl}}/api/auth/register
+Content-Type: {{contentType}}
+
+{
+  "name": "Incomplete User"
+}
+
+### 16. Test tanpa token (harusnya 401)
+GET {{baseUrl}}/api/debug/auth
+
+### 17. Test dengan token invalid (harusnya 401)
+GET {{baseUrl}}/api/debug/auth
+Authorization: Bearer invalid-token-here
