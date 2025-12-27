@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
-const connectionString = process.env.MYSQL_PUBLIC_URL || 'mysql://root:ztRelPVAzBCVGaROfEivGWvMphIMWZWd@hopper.proxy.rlwy.net:41017/railway';
+const connectionString = process.env.MYSQL_PUBLIC_URL || 'mysql://root:pQpGmoZMExdKtjQeGrlNSnJPoMlrHcMw@hopper.proxy.rlwy.net:41017/railway';
 const url = new URL(connectionString);
 
 const pool = mysql.createPool({
