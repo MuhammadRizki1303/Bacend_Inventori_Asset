@@ -1,169 +1,272 @@
-// auth.controller.ts - PERBAIKAN
+// auth.controller.ts
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import pool from '../config/database';
+import { RowDataPacket } from 'mysql2';
 
+interface User extends RowDataPacket {
+  id: number;
+  email: string;
+  password: string;
+  name: string;
+  role: string;
+  status: string;
+  email_verified: boolean;
+}
+
+// 🔴 PERBAIKAN: Export semua fungsi
 export const register = async (req: Request, res: Response) => {
+  // ... kode register ...
+};
+
+export const login = async (req: Request, res: Response) => {
+  // ... kode login ...
+};
+
+export const logout = async (req: Request, res: Response) => {
   try {
-    console.log('Register request body:', req.body);
+    const userId = (req as any).user?.userId;
     
-    const { name, email, password, phone, department } = req.body;
-
-    // Validasi sederhana
-    if (!name || !email || !password) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Name, email, and password are required' 
-      });
+    if (userId) {
+      // Log activity
+      await pool.query(
+        'INSERT INTO activity_log (user_id, action, entity_type) VALUES (?, ?, ?)',
+        [userId, 'User logged out', 'user']
+      );
     }
 
-    const conn = await pool.getConnection();
-    
-    try {
-      // Cek jika email sudah terdaftar
-      const [existingUsers]: any = await conn.query(
-        'SELECT id FROM users WHERE email = ?',
-        [email]
-      );
-
-      if (existingUsers.length > 0) {
-        return res.status(400).json({ 
-          success: false,
-          message: 'Email already registered' 
-        });
-      }
-
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // Insert user (tanpa verification untuk testing)
-      const [result]: any = await conn.query(
-        `INSERT INTO users (name, email, password, phone, department, role, email_verified) 
-         VALUES (?, ?, ?, ?, ?, 'User', TRUE)`,
-        [name, email, hashedPassword, phone || null, department || null]
-      );
-
-      const userId = result.insertId;
-
-      // Generate JWT token
-      const token = jwt.sign(
-        { 
-          userId: userId, 
-          email: email, 
-          name: name, 
-          role: 'User' 
-        },
-        process.env.JWT_SECRET || 'fallback-secret-key-12345',
-        { expiresIn: '24h' }
-      );
-
-      console.log('✅ User registered:', { userId, email });
-
-      res.status(201).json({
-        success: true,
-        message: 'User registered successfully',
-        data: {
-          id: userId,
-          name,
-          email,
-          role: 'User'
-        },
-        token
-      });
-
-    } finally {
-      conn.release();
-    }
-
-  } catch (error: any) {
-    console.error('❌ Register error:', error);
+    res.json({ 
+      success: true,
+      message: 'Logged out successfully' 
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Error registering user',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error' 
     });
   }
 };
 
-export const login = async (req: Request, res: Response) => {
+export const verifyEmail = async (req: Request, res: Response) => {
   try {
-    console.log('Login request:', req.body);
-    
-    const { email, password } = req.body;
+    const { token } = req.body;
 
-    if (!email || !password) {
+    if (!token) {
       return res.status(400).json({ 
         success: false,
-        message: 'Email and password are required' 
+        message: 'Verification token is required' 
       });
     }
 
-    const conn = await pool.getConnection();
-    
-    try {
-      // Cari user
-      const [users]: any = await conn.query(
-        'SELECT * FROM users WHERE email = ?',
-        [email]
-      );
+    // Find user with matching token
+    const [users]: any = await pool.query(
+      `SELECT id, name, email, email_verified, token_expiry 
+       FROM users 
+       WHERE verification_token = ? AND email_verified = false`,
+      [token]
+    );
 
-      if (users.length === 0) {
-        return res.status(401).json({ 
-          success: false,
-          message: 'Invalid credentials' 
-        });
-      }
-
-      const user = users[0];
-
-      // Verify password
-      const isValidPassword = await bcrypt.compare(password, user.password);
-      if (!isValidPassword) {
-        return res.status(401).json({ 
-          success: false,
-          message: 'Invalid credentials' 
-        });
-      }
-
-      // Generate JWT
-      const token = jwt.sign(
-        { 
-          userId: user.id, 
-          email: user.email, 
-          name: user.name, 
-          role: user.role 
-        },
-        process.env.JWT_SECRET || 'fallback-secret-key-12345',
-        { expiresIn: '24h' }
-      );
-
-      // Update last login
-      await conn.query(
-        'UPDATE users SET last_login = NOW() WHERE id = ?',
-        [user.id]
-      );
-
-      // Hapus password dari response
-      delete user.password;
-
-      res.json({
-        success: true,
-        message: 'Login successful',
-        data: user,
-        token
+    if (users.length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid or expired verification token' 
       });
-
-    } finally {
-      conn.release();
     }
 
+    const user = users[0];
+
+    // Check if token is expired
+    const tokenExpiry = new Date(user.token_expiry);
+    if (tokenExpiry < new Date()) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Verification token has expired' 
+      });
+    }
+
+    // Update user as verified
+    await pool.query(
+      `UPDATE users 
+       SET email_verified = true, verification_token = NULL, token_expiry = NULL, status = 'Active'
+       WHERE id = ?`,
+      [user.id]
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Email verified successfully' 
+    });
   } catch (error: any) {
-    console.error('❌ Login error:', error);
+    console.error('Verify email error:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Error logging in',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error' 
     });
   }
+};
+
+export const verifyEmailGet = async (req: Request, res: Response) => {
+  try {
+    const { token } = req.query;
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid verification token' 
+      });
+    }
+
+    // Find user with matching token
+    const [users]: any = await pool.query(
+      `SELECT id, name, email, email_verified, token_expiry 
+       FROM users 
+       WHERE verification_token = ? AND email_verified = false`,
+      [token]
+    );
+
+    if (users.length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid or expired verification token' 
+      });
+    }
+
+    const user = users[0];
+
+    // Check if token is expired
+    const tokenExpiry = new Date(user.token_expiry);
+    if (tokenExpiry < new Date()) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Verification token has expired' 
+      });
+    }
+
+    // Update user as verified
+    await pool.query(
+      `UPDATE users 
+       SET email_verified = true, verification_token = NULL, token_expiry = NULL, status = 'Active'
+       WHERE id = ?`,
+      [user.id]
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Email verified successfully' 
+    });
+  } catch (error: any) {
+    console.error('Verify email error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error' 
+    });
+  }
+};
+
+export const resendVerification = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email is required' 
+      });
+    }
+
+    // Find user
+    const [users]: any = await pool.query(
+      'SELECT id, name, email, email_verified FROM users WHERE email = ?',
+      [email]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+
+    const user = users[0];
+
+    if (user.email_verified) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email already verified' 
+      });
+    }
+
+    // Generate new verification token (sederhana)
+    const verificationToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    // Update token
+    await pool.query(
+      'UPDATE users SET verification_token = ?, token_expiry = ? WHERE id = ?',
+      [verificationToken, tokenExpiry, user.id]
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Verification email has been resent' 
+    });
+  } catch (error: any) {
+    console.error('Resend verification error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error' 
+    });
+  }
+};
+
+export const checkVerificationStatus = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email is required' 
+      });
+    }
+
+    const [users]: any = await pool.query(
+      'SELECT id, email_verified FROM users WHERE email = ?',
+      [email]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+
+    const user = users[0];
+
+    res.json({
+      success: true,
+      emailVerified: user.email_verified,
+      message: user.email_verified ? 'Email is verified' : 'Email not verified'
+    });
+  } catch (error: any) {
+    console.error('Check verification status error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error' 
+    });
+  }
+};
+
+// Export default untuk compatibility
+export default {
+  register,
+  login,
+  logout,
+  verifyEmail,
+  verifyEmailGet,
+  resendVerification,
+  checkVerificationStatus
 };
