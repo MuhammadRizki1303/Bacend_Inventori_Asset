@@ -24,7 +24,7 @@ Content-Type: {{contentType}}
 
 {
   "name": "Test User",
-  "email": "test{{$timestamp}}@example.com",
+  "email": "test{{$timestamp}}@example1.com",
   "password": "password123",
   "phone": "08123456789",
   "department": "IT"
@@ -36,7 +36,7 @@ POST {{baseUrl}}/api/auth/login
 Content-Type: {{contentType}}
 
 {
-  "email": "test{{$timestamp}}@example.com",
+  "email": "test{{$timestamp}}@example1.com",
   "password": "password123"
 }
 

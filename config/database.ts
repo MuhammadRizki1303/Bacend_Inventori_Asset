@@ -54,131 +54,113 @@ export const initDatabase = async (): Promise<void> => {
     conn = await pool.getConnection();
     console.log('🔄 Creating/verifying tables...');
 
-    // 🚨 FIX: CEK DULU APAKAH TABEL SUDAH ADA DAN SCHEMA BENAR
-    console.log('🔍 Checking existing users table structure...');
+    // ==================== USERS TABLE ====================
+    console.log('🔍 Checking/creating users table...');
     
-    // Cek apakah tabel users ada
-    const [tables]: any = await conn.query(`SHOW TABLES LIKE 'users'`);
-    
-    if (tables.length > 0) {
-      console.log('ℹ️  Users table already exists. Checking schema...');
-      
-      // Cek apakah kolom id punya AUTO_INCREMENT
-      const [columns]: any = await conn.query(`
-        SHOW COLUMNS FROM users WHERE Field = 'id'
-      `);
-      
-      if (columns.length > 0) {
-        const idColumn = columns[0];
-        const hasAutoIncrement = idColumn.Extra.toLowerCase().includes('auto_increment');
-        
-        if (!hasAutoIncrement) {
-          console.log('⚠️  FIXING: Adding AUTO_INCREMENT to id column...');
-          
-          try {
-            // 1. Cek apakah ada data di tabel
-            const [rowCount]: any = await conn.query('SELECT COUNT(*) as count FROM users');
-            
-            if (rowCount[0].count === 0) {
-              // Jika tabel kosong, drop dan recreate
-              console.log('🗑️  Table is empty, dropping and recreating...');
-              await conn.query('DROP TABLE users');
-              
-              // Buat tabel baru dengan AUTO_INCREMENT
-              await conn.query(`
-                CREATE TABLE users (
-                  id INT AUTO_INCREMENT PRIMARY KEY,
-                  name VARCHAR(255) NOT NULL,
-                  email VARCHAR(255) UNIQUE NOT NULL,
-                  password VARCHAR(255) NOT NULL,
-                  phone VARCHAR(50),
-                  role VARCHAR(20) DEFAULT 'User',
-                  status VARCHAR(20) DEFAULT 'Active',
-                  department VARCHAR(100),
-                  email_verified BOOLEAN DEFAULT FALSE,
-                  verification_token VARCHAR(255),
-                  token_expiry TIMESTAMP NULL,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
-                )
-              `);
-              console.log('✅ Users table recreated with AUTO_INCREMENT');
-            } else {
-              // Jika ada data, coba ALTER TABLE
-              console.log('⚠️  Table has data, trying to modify column...');
-              await conn.query(`
-                ALTER TABLE users 
-                MODIFY COLUMN id INT AUTO_INCREMENT PRIMARY KEY
-              `);
-              console.log('✅ AUTO_INCREMENT added to existing table');
-            }
-          } catch (alterError: any) {
-            console.error('❌ Cannot modify table structure:', alterError.message);
-            console.log('💡 Try running these SQL commands manually in Railway MySQL:');
-            console.log(`
-              1. SHOW CREATE TABLE users; -- Lihat struktur
-              2. ALTER TABLE users MODIFY id INT AUTO_INCREMENT PRIMARY KEY;
-              3. atau DROP TABLE users; dan buat ulang
-            `);
-          }
-        } else {
-          console.log('✅ id column already has AUTO_INCREMENT');
-        }
-      }
-    } else {
-      // Buat tabel baru jika belum ada
-      console.log('📦 Creating new users table...');
-      await conn.query(`
-        CREATE TABLE users (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          name VARCHAR(255) NOT NULL,
-          email VARCHAR(255) UNIQUE NOT NULL,
-          password VARCHAR(255) NOT NULL,
-          phone VARCHAR(50),
-          role VARCHAR(20) DEFAULT 'User',
-          status VARCHAR(20) DEFAULT 'Active',
-          department VARCHAR(100),
-          email_verified BOOLEAN DEFAULT FALSE,
-          verification_token VARCHAR(255),
-          token_expiry TIMESTAMP NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
-        )
-      `);
-      console.log('✅ users table created');
-    }
-
-    // Buat tabel assets
     await conn.query(`
-      CREATE TABLE IF NOT EXISTS assets (
+      CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
-        type VARCHAR(100) NOT NULL,
-        category VARCHAR(100) NOT NULL,
-        status VARCHAR(20) DEFAULT 'active',
-        value DECIMAL(10,2) DEFAULT 0.00,
-        location VARCHAR(255),
-        description TEXT,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        phone VARCHAR(50),
+        role VARCHAR(20) DEFAULT 'User',
+        status VARCHAR(20) DEFAULT 'Active',
+        department VARCHAR(100),
+        email_verified BOOLEAN DEFAULT FALSE,
+        verification_token VARCHAR(255),
+        token_expiry TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
       )
     `);
+    console.log('✅ users table ready');
+
+    // ==================== ACTIVITY_LOG TABLE ====================
+    console.log('🔍 Checking/creating activity_log table...');
+    
+    try {
+      // Coba buat tabel activity_log jika belum ada
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS activity_log (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT,
+          action VARCHAR(255) NOT NULL,
+          entity_type ENUM('user', 'asset', 'library', 'system'),
+          entity_id INT,
+          details LONGTEXT,
+          ip_address VARCHAR(45),
+          user_agent TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+      `);
+      console.log('✅ activity_log table created/verified');
+      
+      // 🚨 FIX: Cek apakah kolom id sudah AUTO_INCREMENT
+      const [activityLogColumns]: any = await conn.query(`
+        SHOW COLUMNS FROM activity_log WHERE Field = 'id'
+      `);
+      
+      if (activityLogColumns.length > 0) {
+        const idColumn = activityLogColumns[0];
+        const hasAutoIncrement = idColumn.Extra.toLowerCase().includes('auto_increment');
+        
+        if (!hasAutoIncrement) {
+          console.log('⚠️  FIXING: Adding AUTO_INCREMENT to activity_log.id column...');
+          
+          // Cek jika ada data
+          const [rowCount]: any = await conn.query('SELECT COUNT(*) as count FROM activity_log');
+          
+          if (rowCount[0].count === 0) {
+            // Tabel kosong, bisa ALTER
+            await conn.query(`
+              ALTER TABLE activity_log 
+              MODIFY COLUMN id INT AUTO_INCREMENT PRIMARY KEY
+            `);
+            console.log('✅ AUTO_INCREMENT added to activity_log.id');
+          } else {
+            console.log('⚠️  activity_log has data, cannot modify automatically');
+            console.log('💡 Please run manually in MySQL:');
+            console.log('   ALTER TABLE activity_log MODIFY id INT AUTO_INCREMENT PRIMARY KEY;');
+          }
+        } else {
+          console.log('✅ activity_log.id already has AUTO_INCREMENT');
+        }
+      }
+    } catch (activityLogError: any) {
+      console.error('❌ Error with activity_log table:', activityLogError.message);
+      console.log('⚠️  Continuing without activity_log table...');
+    }
+    
     console.log('✅ assets table ready');
 
-    // 🚨 FIX: INSERT ADMIN DENGAN MENYEBUTKAN KOLOM EXPLICIT
+    // ==================== CREATE ADMIN USER ====================
     console.log('👑 Checking admin user...');
     const [users]: any = await conn.query('SELECT COUNT(*) as count FROM users WHERE email = ?', ['admin@example.com']);
     
     if (users[0].count === 0) {
       const hashedPassword = await bcrypt.hash('admin123', 10);
       
-      // 🚨 FIX: JANGAN MASUKKAN ID, biarkan AUTO_INCREMENT bekerja
       await conn.query(`
         INSERT INTO users (name, email, password, role, email_verified, status) 
         VALUES (?, ?, ?, 'Admin', TRUE, 'Active')
       `, ['Administrator', 'admin@example.com', hashedPassword]);
       
       console.log('✅ Admin user created');
+      
+      // Log admin creation activity (jika activity_log sudah fixed)
+      try {
+        const [adminResult]: any = await conn.query('SELECT id FROM users WHERE email = ?', ['admin@example.com']);
+        if (adminResult.length > 0) {
+          await conn.query(
+            'INSERT INTO activity_log (user_id, action, entity_type) VALUES (?, ?, ?)',
+            [adminResult[0].id, 'Admin user created', 'system']
+          );
+        }
+      } catch (logError) {
+        console.log('ℹ️  Could not log admin creation (activity_log issue)');
+      }
     } else {
       console.log('✅ Admin user already exists');
     }
@@ -188,14 +170,10 @@ export const initDatabase = async (): Promise<void> => {
     console.error('❌ Database initialization error:', error.message);
     console.error('SQL Error Code:', error.code);
     console.error('SQL Message:', error.sqlMessage);
-    
-    // Jangan exit, biarkan server tetap running
-    console.log('⚠️  Continuing server startup despite database error...');
   } finally {
     if (conn) conn.release();
   }
 };
-
 // Export types
 export type { PoolConnection };
 export default pool;
