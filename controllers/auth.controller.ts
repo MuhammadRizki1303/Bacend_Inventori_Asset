@@ -15,9 +15,85 @@ interface User extends RowDataPacket {
   email_verified: boolean;
 }
 
-// 🔴 PERBAIKAN: Export semua fungsi
 export const register = async (req: Request, res: Response) => {
-  // ... kode register ...
+  console.log('📝 REGISTER ATTEMPT - START');
+  
+  try {
+    const { name, email, password, phone } = req.body;
+
+    // 1. Validasi cepat
+    if (!name || !email || !password) {
+      console.log('❌ Validation failed');
+      return res.status(400).json({ 
+        success: false,
+        message: 'Nama, email dan password wajib diisi' 
+      });
+    }
+
+    console.log('✅ Validation passed:', { name, email });
+
+    // 2. Hash password dengan salt rendah untuk testing
+    console.log('🔐 Hashing password...');
+    const hashedPassword = await bcrypt.hash(password, 8); // Gunakan 8 bukan 10
+    console.log('✅ Password hashed');
+
+    // 3. Database query dengan timeout
+    const connection = await pool.getConnection();
+    console.log('🗄️ Database connected');
+    
+    try {
+      // Cek email exist
+      const [existingUsers]: any = await connection.query(
+        'SELECT id FROM users WHERE email = ? LIMIT 1',
+        [email]
+      );
+
+      if (existingUsers.length > 0) {
+        connection.release();
+        console.log('❌ Email already exists');
+        return res.status(400).json({ 
+          success: false,
+          message: 'Email sudah terdaftar' 
+        });
+      }
+
+      // Insert user - VERSI SIMPLE tanpa verification dulu
+      console.log('📝 Inserting user...');
+      const [result]: any = await connection.query(
+        `INSERT INTO users (name, email, password, phone, role, status) 
+         VALUES (?, ?, ?, ?, 'User', 'Active')`,
+        [name, email, hashedPassword, phone || null]
+      );
+
+      connection.release();
+      
+      console.log('✅ User created, ID:', result.insertId);
+      
+      // 4. Response cepat tanpa email verification
+      res.status(201).json({
+        success: true,
+        message: 'Registrasi berhasil! Silakan login.',
+        userId: result.insertId
+      });
+      
+    } catch (dbError: any) {
+      connection.release();
+      console.error('❌ Database error:', dbError.message);
+      throw dbError;
+    }
+
+  } catch (error: any) {
+    console.error('🔥 REGISTER ERROR:', error.message);
+    
+    // Berikan response error yang jelas
+    res.status(500).json({ 
+      success: false,
+      message: 'Terjadi kesalahan server',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+  
+  console.log('📝 REGISTER ATTEMPT - END');
 };
 
 export const login = async (req: Request, res: Response) => {

@@ -1,5 +1,5 @@
 ### auth-test.http
-@baseUrl = https://bacendinventoriasser-production.up.railway.app
+@baseUrl = https://bacendinventoriasset-production.up.railway.app
 @contentType = application/json
 
 ### 1. Health Check
