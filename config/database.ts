@@ -99,15 +99,13 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ device_stocks table fixed with AUTO_INCREMENT');
 
-    // ==================== PERBAIKI BORROWINGS TABLE (STRUKTUR LAMA) ====================
-    console.log('🔄 Checking/Fixing borrowings table (ORIGINAL STRUCTURE)...');
+    // ==================== PERBAIKI BORROWINGS TABLE ====================
+    console.log('🔄 Checking/Fixing borrowings table...');
     
-    // Cek dulu apakah tabel ada dan strukturnya benar
     try {
       const [columns]: any = await conn.query(`DESCRIBE borrowings`);
       const idColumn = columns.find((col: any) => col.Field === 'id');
       
-      // Jika kolom id tidak ada AUTO_INCREMENT, drop dan recreate
       if (!idColumn || !idColumn.Extra?.includes('auto_increment')) {
         console.log('⚠️  borrowings table has incorrect structure, dropping and recreating...');
         await conn.query('DROP TABLE IF EXISTS borrowings');
@@ -116,7 +114,7 @@ export const initDatabase = async (): Promise<void> => {
       console.log('ℹ️  borrowings table does not exist, creating new one...');
     }
 
-    // Buat tabel borrowings dengan struktur LAMA (seperti di file image.png)
+    // Buat tabel borrowings dengan struktur LAMA
     await conn.query(`
       CREATE TABLE IF NOT EXISTS borrowings (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -136,9 +134,52 @@ export const initDatabase = async (): Promise<void> => {
         FOREIGN KEY (device_id) REFERENCES device_stocks(id) ON DELETE CASCADE
       ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
-    console.log('✅ borrowings table ready (ORIGINAL STRUCTURE with AUTO_INCREMENT)');
+    console.log('✅ borrowings table ready (with AUTO_INCREMENT)');
 
-   
+    // ==================== HAPUS DAN BUAT ULANG ASSETS TABLE ====================
+    console.log('🗑️  Dropping old assets table...');
+    await conn.query('DROP TABLE IF EXISTS assets');
+    
+    console.log('📦 Creating NEW assets table...');
+    await conn.query(`
+      CREATE TABLE assets (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        type VARCHAR(100) NOT NULL,
+        category VARCHAR(100) NOT NULL,
+        status ENUM('active', 'inactive', 'pending', 'maintenance', 'retired', 'disposed') DEFAULT 'active',
+        value DECIMAL(10,2) DEFAULT 0.00,
+        assigned_to INT,
+        location VARCHAR(255),
+        purchase_date DATE,
+        last_maintenance DATE,
+        description TEXT,
+        file_path VARCHAR(500),
+        file_size BIGINT,
+        mime_type VARCHAR(100),
+        tags LONGTEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
+        created_by INT,
+        asset_number VARCHAR(100) UNIQUE,
+        serial_number VARCHAR(100),
+        model VARCHAR(100),
+        computer_name VARCHAR(100),
+        owner_name VARCHAR(255),
+        owner_department VARCHAR(100),
+        distribution_status ENUM('available', 'assigned', 'reserved', 'in_repair', 'lost', 'damaged') DEFAULT 'available',
+        notes TEXT,
+        INDEX idx_status (status),
+        INDEX idx_category (category),
+        INDEX idx_assigned_to (assigned_to),
+        INDEX idx_distribution_status (distribution_status),
+        INDEX idx_asset_number (asset_number),
+        INDEX idx_serial_number (serial_number),
+        FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
+    `);
+    console.log('✅ NEW assets table created with complete structure');
 
     // ==================== LIBRARY_ITEMS TABLE ====================
     console.log('📦 Creating library_items table...');
@@ -200,57 +241,68 @@ export const initDatabase = async (): Promise<void> => {
       console.log('✅ Admin user created');
     }
 
-    // ==================== VERIFIKASI TABEL BORROWINGS ====================
-    console.log('\n🔍 Verifying borrowings table structure...');
+    // ==================== VERIFIKASI TABEL ASSETS ====================
+    console.log('\n🔍 Verifying assets table structure...');
     try {
-      const [columns]: any = await conn.query(`DESCRIBE borrowings`);
-      console.log(`📊 borrowings table has ${columns.length} columns:`);
-      
-      for (const col of columns) {
-        console.log(`   ${col.Field}: ${col.Type} ${col.Null === 'NO' ? 'NOT NULL' : ''} ${col.Extra || ''}`);
-      }
+      const [columns]: any = await conn.query(`DESCRIBE assets`);
+      console.log(`📊 assets table has ${columns.length} columns (expected: 26)`);
       
       const idColumn = columns.find((col: any) => col.Field === 'id');
       if (idColumn?.Extra?.includes('auto_increment')) {
-        console.log('✅ borrowings.id has AUTO_INCREMENT ✓');
+        console.log('✅ assets.id has AUTO_INCREMENT ✓');
       } else {
-        console.log('❌ borrowings.id does NOT have AUTO_INCREMENT');
+        console.log('❌ assets.id does NOT have AUTO_INCREMENT');
+      }
+      
+      // Cek kolom-kolom penting
+      const importantColumns = ['asset_number', 'serial_number', 'distribution_status', 'owner_name'];
+      for (const colName of importantColumns) {
+        const col = columns.find((c: any) => c.Field === colName);
+        if (col) {
+          console.log(`✅ ${colName}: ${col.Type}`);
+        } else {
+          console.log(`❌ ${colName}: NOT FOUND`);
+        }
       }
     } catch (e) {
-      console.log('⚠️  Could not verify borrowings table');
+      console.log('⚠️  Could not verify assets table');
     }
 
-    // ==================== TEST INSERT KE BORROWINGS ====================
-    console.log('\n🧪 Testing borrowings insertion...');
+    // ==================== TEST INSERT KE ASSETS ====================
+    console.log('\n🧪 Testing assets insertion...');
     try {
-      // Buat test device terlebih dahulu
-      const [deviceResult]: any = await conn.query(
-        'INSERT INTO device_stocks (name, category, total_stock, available_stock, borrowed_count) VALUES (?, ?, ?, ?, ?)',
-        ['Dell Keyboard', 'Keyboard', 5, 5, 0]
-      );
-      const deviceId = deviceResult.insertId;
+      const [adminUser]: any = await conn.query('SELECT id FROM users WHERE email = ?', ['admin@example.com']);
+      const adminId = adminUser[0]?.id;
       
-      // Test insert ke borrowings (struktur lama)
-      const [borrowResult]: any = await conn.query(
-        `INSERT INTO borrowings 
-         (employee_name, device_id, device_name, quantity, borrow_date, return_date, status) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        ['Jane Smith', deviceId, 'Dell Keyboard', 1, '2025-12-27', '2025-12-28', 'borrowed']
-      );
-      
-      console.log(`✅ borrowings test: Insert ID = ${borrowResult.insertId} ✓`);
-      
-      // Verifikasi data yang diinsert
-      const [borrowData]: any = await conn.query('SELECT * FROM borrowings WHERE id = ?', [borrowResult.insertId]);
-      console.log(`📋 Test borrowing data: ${JSON.stringify(borrowData[0])}`);
-      
+      if (adminId) {
+        const [assetResult]: any = await conn.query(
+          `INSERT INTO assets 
+           (name, type, category, status, value, asset_number, serial_number, 
+            model, computer_name, owner_name, owner_department, distribution_status,
+            created_by, location, description) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ['Dell Latitude 7420', 'Laptop', 'Computer Equipment', 'active', 1500.00,
+           'AST-2024-001', 'SN-DELL-001', 'Latitude 7420', 'DELL-7420-001',
+           'John Doe', 'IT Department', 'assigned',
+           adminId, 'Building A, Room 101', 'Company laptop for IT staff']
+        );
+        
+        console.log(`✅ assets test: Insert ID = ${assetResult.insertId} ✓`);
+        
+        // Verifikasi data
+        const [assetData]: any = await conn.query('SELECT name, asset_number, serial_number FROM assets WHERE id = ?', [assetResult.insertId]);
+        console.log(`📋 Test asset: ${JSON.stringify(assetData[0])}`);
+      } else {
+        console.log('⚠️  Admin user not found, skipping assets test');
+      }
     } catch (error: any) {
-      console.error(`❌ Test borrowing insertion failed: ${error.message}`);
+      console.error(`❌ Test assets insertion failed: ${error.message}`);
       if (error.sql) console.error(`SQL: ${error.sql}`);
     }
 
     console.log('\n🎉 DATABASE INITIALIZATION COMPLETE!');
-    console.log('✅ device_stocks and borrowings tables now have AUTO_INCREMENT');
+    console.log('✅ All tables now have AUTO_INCREMENT');
+    console.log('✅ New assets table created with 26 columns');
 
   } catch (error: any) {
     console.error('❌ Database initialization error:', error.message);
@@ -259,7 +311,6 @@ export const initDatabase = async (): Promise<void> => {
     if (conn) conn.release();
   }
 };
-
 // Export types
 export type { PoolConnection };
 export default pool;
