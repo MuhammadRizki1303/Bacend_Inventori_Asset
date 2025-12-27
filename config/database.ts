@@ -78,10 +78,13 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ users table ready');
 
-    // ==================== DEVICE_STOCKS TABLE (Tabel untuk stok keseluruhan) ====================
-    console.log('📦 Creating device_stocks table...');
+    // ==================== HAPUS DAN RECREATE DEVICE_STOCKS TABLE ====================
+    console.log('⚠️ Dropping old device_stocks table...');
+    await conn.query('DROP TABLE IF EXISTS device_stocks');
+    
+    console.log('📦 Creating NEW device_stocks table with AUTO_INCREMENT...');
     await conn.query(`
-      CREATE TABLE IF NOT EXISTS device_stocks (
+      CREATE TABLE device_stocks (
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         category VARCHAR(100) NOT NULL,
@@ -95,7 +98,7 @@ export const initDatabase = async (): Promise<void> => {
         INDEX idx_available (available_stock)
       ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
-    console.log('✅ device_stocks table ready');
+    console.log('✅ NEW device_stocks table created with AUTO_INCREMENT');
 
     // ==================== DEVICE_STOCK TABLE (Tabel untuk tracking perangkat individual) ====================
     console.log('📦 Creating device_stock table (individual devices)...');
@@ -125,7 +128,28 @@ export const initDatabase = async (): Promise<void> => {
     console.log('✅ device_stock table ready');
 
     // ==================== LIBRARY_ITEMS TABLE ====================
-    
+    console.log('📦 Creating library_items table...');
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS library_items (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        type VARCHAR(100) NOT NULL,
+        file_size BIGINT,
+        file_path VARCHAR(500),
+        mime_type VARCHAR(100),
+        uploaded_by INT,
+        description TEXT,
+        tags JSON,
+        downloads INT DEFAULT 0,
+        views INT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_uploaded_by (uploaded_by),
+        INDEX idx_type (type),
+        FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
+    `);
+    console.log('✅ library_items table ready');
 
     // ==================== ACTIVITY_LOG TABLE ====================
     console.log('📦 Creating activity_log table...');
@@ -147,6 +171,27 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ activity_log table ready');
 
+    // ==================== MAINTENANCE_LOG TABLE ====================
+    console.log('📦 Creating maintenance_log table...');
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS maintenance_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        device_stock_id INT NOT NULL,
+        maintenance_type ENUM('routine', 'repair', 'upgrade', 'inspection') DEFAULT 'routine',
+        description TEXT NOT NULL,
+        cost DECIMAL(10,2),
+        performed_by VARCHAR(255),
+        performed_date DATE NOT NULL,
+        next_maintenance_date DATE,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_device_stock_id (device_stock_id),
+        INDEX idx_maintenance_date (performed_date),
+        FOREIGN KEY (device_stock_id) REFERENCES device_stock(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
+    `);
+    console.log('✅ maintenance_log table ready');
+
     // Enable foreign key checks kembali
     await conn.query('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -163,23 +208,41 @@ export const initDatabase = async (): Promise<void> => {
       console.log('✅ Admin user created');
     }
 
-    // ==================== VERIFIKASI SEMUA TABEL ====================
-    console.log('\n🔍 Verifying all table structures...');
-    const tables = ['users', 'device_stocks', 'device_stock', 'borrowings', 'assets', 'library_items', 'activity_log', 'maintenance_log'];
-    
-    for (const table of tables) {
-      try {
-        const [columns]: any = await conn.query(`DESCRIBE ${table}`);
-        const hasAutoIncrement = columns.some((col: any) => 
-          col.Field === 'id' && col.Extra?.includes('auto_increment')
-        );
-        console.log(`📊 ${table}: ${columns.length} columns, AUTO_INCREMENT: ${hasAutoIncrement ? '✅' : '❌'}`);
-      } catch (e) {
-        console.log(`⚠️  Could not verify ${table} table`);
+    // ==================== VERIFIKASI STRUCTURE DEVICE_STOCKS ====================
+    console.log('\n🔍 Verifying device_stocks table structure...');
+    try {
+      const [columns]: any = await conn.query(`DESCRIBE device_stocks`);
+      const idColumn = columns.find((col: any) => col.Field === 'id');
+      console.log(`📊 device_stocks.id: Type=${idColumn?.Type}, Extra=${idColumn?.Extra}`);
+      
+      if (idColumn?.Extra?.includes('auto_increment')) {
+        console.log('✅ device_stocks.id has AUTO_INCREMENT');
+      } else {
+        console.log('❌ device_stocks.id does NOT have AUTO_INCREMENT');
       }
+    } catch (e) {
+      console.log('⚠️  Could not verify device_stocks table');
     }
 
-    console.log('\n🎉 ALL DATABASE TABLES INITIALIZED SUCCESSFULLY!');
+    // ==================== TEST INSERT DEVICE ====================
+    console.log('\n🧪 Testing device insertion...');
+    try {
+      const [result]: any = await conn.query(
+        'INSERT INTO device_stocks (name, category, total_stock, available_stock, borrowed_count) VALUES (?, ?, ?, ?, ?)',
+        ['Test Device', 'Keyboard', 5, 5, 0]
+      );
+      console.log(`✅ Test device inserted successfully! Insert ID: ${result.insertId}`);
+      
+      // Cek data yang baru diinsert
+      const [devices]: any = await conn.query('SELECT * FROM device_stocks WHERE id = ?', [result.insertId]);
+      console.log(`📋 Test device data: ${JSON.stringify(devices[0])}`);
+    } catch (error: any) {
+      console.error(`❌ Test device insertion failed: ${error.message}`);
+      console.error(`SQL: ${error.sql}`);
+    }
+
+    console.log('\n🎉 DATABASE TABLES REINITIALIZED SUCCESSFULLY!');
+    console.log('⚠️  NOTE: All previous device_stocks and borrowings data has been cleared.');
 
   } catch (error: any) {
     console.error('❌ Database initialization error:', error.message);
@@ -188,6 +251,7 @@ export const initDatabase = async (): Promise<void> => {
     if (conn) conn.release();
   }
 };
+
 // Export types
 export type { PoolConnection };
 export default pool;
