@@ -41,6 +41,7 @@ export const testConnection = async (): Promise<boolean> => {
   }
 };
 
+// Buat tabel jika belum ada (tanpa retry logic yang kompleks)
 export const initDatabase = async (): Promise<void> => {
   const isConnected = await testConnection();
   if (!isConnected) {
@@ -53,36 +54,99 @@ export const initDatabase = async (): Promise<void> => {
     conn = await pool.getConnection();
     console.log('🔄 Creating/verifying tables...');
 
-    // FIX: Drop table jika sudah ada (UNTUK DEVELOPMENT)
-    if (process.env.NODE_ENV === 'development') {
-      console.log('🗑️  Dropping existing users table for recreation...');
-      try {
-        await conn.query('DROP TABLE IF EXISTS users');
-        console.log('✅ Old users table dropped');
-      } catch (dropError) {
-        console.log('ℹ️  No users table to drop');
+    // 🚨 FIX: CEK DULU APAKAH TABEL SUDAH ADA DAN SCHEMA BENAR
+    console.log('🔍 Checking existing users table structure...');
+    
+    // Cek apakah tabel users ada
+    const [tables]: any = await conn.query(`SHOW TABLES LIKE 'users'`);
+    
+    if (tables.length > 0) {
+      console.log('ℹ️  Users table already exists. Checking schema...');
+      
+      // Cek apakah kolom id punya AUTO_INCREMENT
+      const [columns]: any = await conn.query(`
+        SHOW COLUMNS FROM users WHERE Field = 'id'
+      `);
+      
+      if (columns.length > 0) {
+        const idColumn = columns[0];
+        const hasAutoIncrement = idColumn.Extra.toLowerCase().includes('auto_increment');
+        
+        if (!hasAutoIncrement) {
+          console.log('⚠️  FIXING: Adding AUTO_INCREMENT to id column...');
+          
+          try {
+            // 1. Cek apakah ada data di tabel
+            const [rowCount]: any = await conn.query('SELECT COUNT(*) as count FROM users');
+            
+            if (rowCount[0].count === 0) {
+              // Jika tabel kosong, drop dan recreate
+              console.log('🗑️  Table is empty, dropping and recreating...');
+              await conn.query('DROP TABLE users');
+              
+              // Buat tabel baru dengan AUTO_INCREMENT
+              await conn.query(`
+                CREATE TABLE users (
+                  id INT AUTO_INCREMENT PRIMARY KEY,
+                  name VARCHAR(255) NOT NULL,
+                  email VARCHAR(255) UNIQUE NOT NULL,
+                  password VARCHAR(255) NOT NULL,
+                  phone VARCHAR(50),
+                  role VARCHAR(20) DEFAULT 'User',
+                  status VARCHAR(20) DEFAULT 'Active',
+                  department VARCHAR(100),
+                  email_verified BOOLEAN DEFAULT FALSE,
+                  verification_token VARCHAR(255),
+                  token_expiry TIMESTAMP NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
+                )
+              `);
+              console.log('✅ Users table recreated with AUTO_INCREMENT');
+            } else {
+              // Jika ada data, coba ALTER TABLE
+              console.log('⚠️  Table has data, trying to modify column...');
+              await conn.query(`
+                ALTER TABLE users 
+                MODIFY COLUMN id INT AUTO_INCREMENT PRIMARY KEY
+              `);
+              console.log('✅ AUTO_INCREMENT added to existing table');
+            }
+          } catch (alterError: any) {
+            console.error('❌ Cannot modify table structure:', alterError.message);
+            console.log('💡 Try running these SQL commands manually in Railway MySQL:');
+            console.log(`
+              1. SHOW CREATE TABLE users; -- Lihat struktur
+              2. ALTER TABLE users MODIFY id INT AUTO_INCREMENT PRIMARY KEY;
+              3. atau DROP TABLE users; dan buat ulang
+            `);
+          }
+        } else {
+          console.log('✅ id column already has AUTO_INCREMENT');
+        }
       }
+    } else {
+      // Buat tabel baru jika belum ada
+      console.log('📦 Creating new users table...');
+      await conn.query(`
+        CREATE TABLE users (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password VARCHAR(255) NOT NULL,
+          phone VARCHAR(50),
+          role VARCHAR(20) DEFAULT 'User',
+          status VARCHAR(20) DEFAULT 'Active',
+          department VARCHAR(100),
+          email_verified BOOLEAN DEFAULT FALSE,
+          verification_token VARCHAR(255),
+          token_expiry TIMESTAMP NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('✅ users table created');
     }
-
-    // Buat tabel users dengan AUTO_INCREMENT yang benar
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        phone VARCHAR(50),
-        role VARCHAR(20) DEFAULT 'User',
-        status VARCHAR(20) DEFAULT 'Active',
-        department VARCHAR(100),
-        email_verified BOOLEAN DEFAULT FALSE,
-        verification_token VARCHAR(255),
-        token_expiry TIMESTAMP NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB AUTO_INCREMENT=1
-    `);
-    console.log('✅ users table ready');
 
     // Buat tabel assets
     await conn.query(`
@@ -101,36 +165,32 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ assets table ready');
 
-    // Cek jika admin user belum ada
+    // 🚨 FIX: INSERT ADMIN DENGAN MENYEBUTKAN KOLOM EXPLICIT
+    console.log('👑 Checking admin user...');
     const [users]: any = await conn.query('SELECT COUNT(*) as count FROM users WHERE email = ?', ['admin@example.com']);
+    
     if (users[0].count === 0) {
       const hashedPassword = await bcrypt.hash('admin123', 10);
-      await conn.query(`
-        INSERT INTO users (name, email, password, role, status) 
-        VALUES ('Administrator', 'admin@example.com', ?, 'Admin', 'Active')
-      `, [hashedPassword]);
-      console.log('✅ Admin user created');
-    }
-
-    // FIX: Test insert data dummy untuk verifikasi AUTO_INCREMENT bekerja
-    console.log('🧪 Testing AUTO_INCREMENT...');
-    try {
-      const [testResult]: any = await conn.query(`
-        INSERT INTO users (name, email, password) 
-        VALUES ('Test User', 'test@example.com', 'dummy')
-      `);
-      console.log('✅ AUTO_INCREMENT test passed, inserted ID:', testResult.insertId);
       
-      // Hapus data test
-      await conn.query('DELETE FROM users WHERE email = ?', ['test@example.com']);
-    } catch (testError: any) {
-      console.error('❌ AUTO_INCREMENT test failed:', testError.message);
+      // 🚨 FIX: JANGAN MASUKKAN ID, biarkan AUTO_INCREMENT bekerja
+      await conn.query(`
+        INSERT INTO users (name, email, password, role, email_verified, status) 
+        VALUES (?, ?, ?, 'Admin', TRUE, 'Active')
+      `, ['Administrator', 'admin@example.com', hashedPassword]);
+      
+      console.log('✅ Admin user created');
+    } else {
+      console.log('✅ Admin user already exists');
     }
 
     console.log('🎉 Database initialization complete');
   } catch (error: any) {
     console.error('❌ Database initialization error:', error.message);
-    console.error('Full error:', error);
+    console.error('SQL Error Code:', error.code);
+    console.error('SQL Message:', error.sqlMessage);
+    
+    // Jangan exit, biarkan server tetap running
+    console.log('⚠️  Continuing server startup despite database error...');
   } finally {
     if (conn) conn.release();
   }
