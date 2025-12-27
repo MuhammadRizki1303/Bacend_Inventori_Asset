@@ -8,7 +8,7 @@ console.log('🚀 Starting database initialization...');
 
 // Gunakan connection string langsung (Railway)
 const connectionString = process.env.MYSQL_PUBLIC_URL || 
-  'mysql://root:pQpGmoZMExdKtjQeGrlNSnJPoMlrHcMw@hopper.proxy.rlwy.net:41017/railway';
+  'mysql://root:pQpGmoZMExdKtjQeGrlNSnJPoMlrHcMw@interchange.proxy.rlwy.net:48741/railway';
 
 console.log('🔗 Connecting to database...');
 
