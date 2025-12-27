@@ -41,7 +41,6 @@ export const testConnection = async (): Promise<boolean> => {
   }
 };
 
-// Buat tabel jika belum ada (tanpa retry logic yang kompleks)
 export const initDatabase = async (): Promise<void> => {
   const isConnected = await testConnection();
   if (!isConnected) {
@@ -52,11 +51,13 @@ export const initDatabase = async (): Promise<void> => {
   let conn: PoolConnection | null = null;
   try {
     conn = await pool.getConnection();
-    console.log('🔄 Creating/verifying tables...');
+    console.log('🔄 Creating/verifying ALL tables...');
+
+    // Disable foreign key checks
+    await conn.query('SET FOREIGN_KEY_CHECKS = 0');
 
     // ==================== USERS TABLE ====================
-    console.log('🔍 Checking/creating users table...');
-    
+    console.log('📦 Creating users table...');
     await conn.query(`
       CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -73,71 +74,55 @@ export const initDatabase = async (): Promise<void> => {
         last_login TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
-      )
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
     console.log('✅ users table ready');
 
-    // ==================== ACTIVITY_LOG TABLE ====================
-    console.log('🔍 FIXING activity_log table DEFINITIVELY...');
-    
-    try {
-      // 🚨 STEP 1: Nonaktifkan foreign key checks
-      await conn.query('SET FOREIGN_KEY_CHECKS = 0');
-      
-      // 🚨 STEP 2: Drop tabel jika sudah ada (bersih-bersih total)
-      await conn.query('DROP TABLE IF EXISTS activity_log');
-      console.log('🗑️  Dropped old activity_log table');
-      
-      // 🚨 STEP 3: Buat tabel baru dengan AUTO_INCREMENT yang BENAR
-      await conn.query(`
-        CREATE TABLE activity_log (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          user_id INT,
-          action VARCHAR(255) NOT NULL,
-          entity_type ENUM('user', 'asset', 'library', 'system') DEFAULT 'user',
-          entity_id INT,
-          details LONGTEXT,
-          ip_address VARCHAR(45),
-          user_agent TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          INDEX idx_user_id (user_id),
-          INDEX idx_created_at (created_at),
-          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-        ) ENGINE=InnoDB AUTO_INCREMENT=1
-      `);
-      
-      console.log('✅ activity_log table created with AUTO_INCREMENT');
-      
-      // 🚨 STEP 4: Aktifkan kembali foreign key checks
-      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
-      
-    } catch (activityLogError: any) {
-      console.error('❌ CRITICAL: Could not create activity_log table:', activityLogError.message);
-      
-      // Coba cara alternatif tanpa foreign key dulu
-      try {
-        console.log('🔄 Trying alternative: creating activity_log without foreign key...');
-        await conn.query(`
-          CREATE TABLE IF NOT EXISTS activity_log (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT,
-            action VARCHAR(255) NOT NULL,
-            entity_type VARCHAR(50),
-            entity_id INT,
-            details LONGTEXT,
-            ip_address VARCHAR(45),
-            user_agent TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          )
-        `);
-        console.log('✅ activity_log table created (without foreign key)');
-      } catch (altError: any) {
-        console.error('❌ Even alternative method failed:', altError.message);
-      }
-    }
+    // ==================== DEVICE_STOCKS TABLE ====================
+    console.log('📦 Creating device_stocks table...');
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS device_stocks (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        category VARCHAR(100) NOT NULL,
+        total_stock INT NOT NULL DEFAULT 0,
+        available_stock INT NOT NULL DEFAULT 0,
+        borrowed_count INT NOT NULL DEFAULT 0,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_category (category),
+        INDEX idx_available (available_stock)
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
+    `);
+    console.log('✅ device_stocks table ready');
+
+    // ==================== BORROWINGS TABLE ====================
+    console.log('📦 Creating borrowings table...');
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS borrowings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        employee_name VARCHAR(255) NOT NULL,
+        device_id INT NOT NULL,
+        device_name VARCHAR(255) NOT NULL,
+        quantity INT NOT NULL DEFAULT 1,
+        borrow_date DATE NOT NULL,
+        return_date DATE,
+        status ENUM('borrowed', 'returned', 'overdue') DEFAULT 'borrowed',
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_device_id (device_id),
+        INDEX idx_status (status),
+        INDEX idx_employee (employee_name),
+        INDEX idx_borrow_date (borrow_date),
+        FOREIGN KEY (device_id) REFERENCES device_stocks(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
+    `);
+    console.log('✅ borrowings table ready');
 
     // ==================== ASSETS TABLE ====================
-    console.log('🔍 Creating/verifying assets table...');
+    console.log('📦 Creating assets table...');
     await conn.query(`
       CREATE TABLE IF NOT EXISTS assets (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -150,48 +135,12 @@ export const initDatabase = async (): Promise<void> => {
         description TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
-      )
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
     console.log('✅ assets table ready');
 
     // ==================== LIBRARY_ITEMS TABLE ====================
-console.log('🔍 Creating/verifying library_items table...');
-
-try {
-  // Drop dan buat ulang untuk pastikan AUTO_INCREMENT ada
-  await conn.query('DROP TABLE IF EXISTS library_items');
-  console.log('🗑️  Dropped old library_items table');
-  
-  await conn.query(`
-    CREATE TABLE library_items (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      title VARCHAR(255) NOT NULL,
-      type VARCHAR(100) NOT NULL,
-      file_size BIGINT,
-      file_path VARCHAR(500),
-      mime_type VARCHAR(100),
-      uploaded_by INT,
-      description TEXT,
-      tags JSON,
-      downloads INT DEFAULT 0,
-      views INT DEFAULT 0,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
-      INDEX idx_uploaded_by (uploaded_by),
-      INDEX idx_type (type),
-      INDEX idx_created_at (created_at),
-      FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
-    ) ENGINE=InnoDB AUTO_INCREMENT=1
-  `);
-  
-  console.log('✅ library_items table created with AUTO_INCREMENT');
-  
-} catch (libraryError: any) {
-  console.error('❌ Error creating library_items table:', libraryError.message);
-  
-  // Coba buat tanpa foreign key jika error
-  try {
-    console.log('🔄 Trying alternative: library_items without foreign key...');
+    console.log('📦 Creating library_items table...');
     await conn.query(`
       CREATE TABLE IF NOT EXISTS library_items (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -206,14 +155,36 @@ try {
         downloads INT DEFAULT 0,
         views INT DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
-      )
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_uploaded_by (uploaded_by),
+        INDEX idx_type (type),
+        FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
-    console.log('✅ library_items table created (without foreign key)');
-  } catch (altError: any) {
-    console.error('❌ Alternative method also failed:', altError.message);
-  }
-}
+    console.log('✅ library_items table ready');
+
+    // ==================== ACTIVITY_LOG TABLE ====================
+    console.log('📦 Creating activity_log table...');
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS activity_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT,
+        action VARCHAR(255) NOT NULL,
+        entity_type ENUM('user', 'asset', 'library', 'device', 'borrowing', 'system') DEFAULT 'user',
+        entity_id INT,
+        details LONGTEXT,
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user_id (user_id),
+        INDEX idx_entity (entity_type, entity_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB AUTO_INCREMENT=1
+    `);
+    console.log('✅ activity_log table ready');
+
+    // Enable foreign key checks kembali
+    await conn.query('SET FOREIGN_KEY_CHECKS = 1');
 
     // ==================== CREATE ADMIN USER ====================
     console.log('👑 Checking admin user...');
@@ -221,40 +192,34 @@ try {
     
     if (users[0].count === 0) {
       const hashedPassword = await bcrypt.hash('admin123', 10);
-      
-      await conn.query(`
-        INSERT INTO users (name, email, password, role, email_verified, status) 
-        VALUES (?, ?, ?, 'Admin', TRUE, 'Active')
-      `, ['Administrator', 'admin@example.com', hashedPassword]);
-      
-      console.log('✅ Admin user created: admin@example.com / admin123');
-    } else {
-      console.log('✅ Admin user already exists');
+      await conn.query(
+        'INSERT INTO users (name, email, password, role, email_verified, status) VALUES (?, ?, ?, ?, ?, ?)',
+        ['Administrator', 'admin@example.com', hashedPassword, 'Admin', true, 'Active']
+      );
+      console.log('✅ Admin user created');
     }
 
-    // ==================== VERIFIKASI TABEL ====================
-    console.log('🔍 Verifying table structures...');
+    // ==================== VERIFIKASI SEMUA TABEL ====================
+    console.log('\n🔍 Verifying all table structures...');
+    const tables = ['users', 'device_stocks', 'borrowings', 'assets', 'library_items', 'activity_log'];
     
-    // Cek users table
-    const [userColumns]: any = await conn.query('DESCRIBE users');
-    console.log(`📊 users table has ${userColumns.length} columns`);
-    
-    // Cek activity_log table
-    try {
-      const [activityColumns]: any = await conn.query('DESCRIBE activity_log');
-      console.log(`📊 activity_log table has ${activityColumns.length} columns`);
-      console.log('🔑 activity_log.id is AUTO_INCREMENT:', 
-        activityColumns.find((col: any) => col.Field === 'id')?.Extra?.includes('auto_increment') ? '✅ YES' : '❌ NO');
-    } catch (e) {
-      console.log('⚠️  Could not verify activity_log table');
+    for (const table of tables) {
+      try {
+        const [columns]: any = await conn.query(`DESCRIBE ${table}`);
+        const hasAutoIncrement = columns.some((col: any) => 
+          col.Field === 'id' && col.Extra?.includes('auto_increment')
+        );
+        console.log(`📊 ${table}: ${columns.length} columns, AUTO_INCREMENT: ${hasAutoIncrement ? '✅' : '❌'}`);
+      } catch (e) {
+        console.log(`⚠️  Could not verify ${table} table`);
+      }
     }
 
-    console.log('🎉 Database initialization complete');
+    console.log('\n🎉 ALL DATABASE TABLES INITIALIZED SUCCESSFULLY!');
 
   } catch (error: any) {
     console.error('❌ Database initialization error:', error.message);
-    console.error('SQL Error Code:', error.code);
-    console.error('SQL Message:', error.sqlMessage);
+    console.error('Full error:', error);
   } finally {
     if (conn) conn.release();
   }
