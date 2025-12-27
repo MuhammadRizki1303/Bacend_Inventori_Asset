@@ -24,7 +24,7 @@ Content-Type: {{contentType}}
 
 {
   "name": "Test User",
-  "email": "test{{$timestamp}}@example1.com",
+  "email": "test@example.com",
   "password": "password123",
   "phone": "08123456789",
   "department": "IT"
@@ -36,7 +36,7 @@ POST {{baseUrl}}/api/auth/login
 Content-Type: {{contentType}}
 
 {
-  "email": "test{{$timestamp}}@example1.com",
+  "email": "test@example.com",
   "password": "password123"
 }
 
@@ -97,17 +97,17 @@ Content-Type: {{contentType}}
 
 {
   "name": "Duplicate User",
-  "email": "admin@example.com",
+  "email": "admin@example2.com",
   "password": "password123"
 }
 
 ### 15.2 Login dengan password salah
 POST {{baseUrl}}/api/auth/login
-Content-Type: {{contentType}}
+Content-Type: application/json
 
 {
   "email": "admin@example.com",
-  "password": "wrongpassword"
+  "password": "admin123"
 }
 
 ### 15.3 Login dengan email tidak ada

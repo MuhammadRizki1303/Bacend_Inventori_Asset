@@ -70,6 +70,7 @@ export const initDatabase = async (): Promise<void> => {
         email_verified BOOLEAN DEFAULT FALSE,
         verification_token VARCHAR(255),
         token_expiry TIMESTAMP NULL,
+        last_login TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
       )
@@ -77,62 +78,80 @@ export const initDatabase = async (): Promise<void> => {
     console.log('✅ users table ready');
 
     // ==================== ACTIVITY_LOG TABLE ====================
-    console.log('🔍 Checking/creating activity_log table...');
+    console.log('🔍 FIXING activity_log table DEFINITIVELY...');
     
     try {
-      // Coba buat tabel activity_log jika belum ada
+      // 🚨 STEP 1: Nonaktifkan foreign key checks
+      await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+      
+      // 🚨 STEP 2: Drop tabel jika sudah ada (bersih-bersih total)
+      await conn.query('DROP TABLE IF EXISTS activity_log');
+      console.log('🗑️  Dropped old activity_log table');
+      
+      // 🚨 STEP 3: Buat tabel baru dengan AUTO_INCREMENT yang BENAR
       await conn.query(`
-        CREATE TABLE IF NOT EXISTS activity_log (
+        CREATE TABLE activity_log (
           id INT AUTO_INCREMENT PRIMARY KEY,
           user_id INT,
           action VARCHAR(255) NOT NULL,
-          entity_type ENUM('user', 'asset', 'library', 'system'),
+          entity_type ENUM('user', 'asset', 'library', 'system') DEFAULT 'user',
           entity_id INT,
           details LONGTEXT,
           ip_address VARCHAR(45),
           user_agent TEXT,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_user_id (user_id),
+          INDEX idx_created_at (created_at),
           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-        )
-      `);
-      console.log('✅ activity_log table created/verified');
-      
-      // 🚨 FIX: Cek apakah kolom id sudah AUTO_INCREMENT
-      const [activityLogColumns]: any = await conn.query(`
-        SHOW COLUMNS FROM activity_log WHERE Field = 'id'
+        ) ENGINE=InnoDB AUTO_INCREMENT=1
       `);
       
-      if (activityLogColumns.length > 0) {
-        const idColumn = activityLogColumns[0];
-        const hasAutoIncrement = idColumn.Extra.toLowerCase().includes('auto_increment');
-        
-        if (!hasAutoIncrement) {
-          console.log('⚠️  FIXING: Adding AUTO_INCREMENT to activity_log.id column...');
-          
-          // Cek jika ada data
-          const [rowCount]: any = await conn.query('SELECT COUNT(*) as count FROM activity_log');
-          
-          if (rowCount[0].count === 0) {
-            // Tabel kosong, bisa ALTER
-            await conn.query(`
-              ALTER TABLE activity_log 
-              MODIFY COLUMN id INT AUTO_INCREMENT PRIMARY KEY
-            `);
-            console.log('✅ AUTO_INCREMENT added to activity_log.id');
-          } else {
-            console.log('⚠️  activity_log has data, cannot modify automatically');
-            console.log('💡 Please run manually in MySQL:');
-            console.log('   ALTER TABLE activity_log MODIFY id INT AUTO_INCREMENT PRIMARY KEY;');
-          }
-        } else {
-          console.log('✅ activity_log.id already has AUTO_INCREMENT');
-        }
-      }
+      console.log('✅ activity_log table created with AUTO_INCREMENT');
+      
+      // 🚨 STEP 4: Aktifkan kembali foreign key checks
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+      
     } catch (activityLogError: any) {
-      console.error('❌ Error with activity_log table:', activityLogError.message);
-      console.log('⚠️  Continuing without activity_log table...');
+      console.error('❌ CRITICAL: Could not create activity_log table:', activityLogError.message);
+      
+      // Coba cara alternatif tanpa foreign key dulu
+      try {
+        console.log('🔄 Trying alternative: creating activity_log without foreign key...');
+        await conn.query(`
+          CREATE TABLE IF NOT EXISTS activity_log (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT,
+            action VARCHAR(255) NOT NULL,
+            entity_type VARCHAR(50),
+            entity_id INT,
+            details LONGTEXT,
+            ip_address VARCHAR(45),
+            user_agent TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+        console.log('✅ activity_log table created (without foreign key)');
+      } catch (altError: any) {
+        console.error('❌ Even alternative method failed:', altError.message);
+      }
     }
-    
+
+    // ==================== ASSETS TABLE ====================
+    console.log('🔍 Creating/verifying assets table...');
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS assets (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        type VARCHAR(100) NOT NULL,
+        category VARCHAR(100) NOT NULL,
+        status VARCHAR(20) DEFAULT 'active',
+        value DECIMAL(10,2) DEFAULT 0.00,
+        location VARCHAR(255),
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
     console.log('✅ assets table ready');
 
     // ==================== CREATE ADMIN USER ====================
@@ -147,25 +166,30 @@ export const initDatabase = async (): Promise<void> => {
         VALUES (?, ?, ?, 'Admin', TRUE, 'Active')
       `, ['Administrator', 'admin@example.com', hashedPassword]);
       
-      console.log('✅ Admin user created');
-      
-      // Log admin creation activity (jika activity_log sudah fixed)
-      try {
-        const [adminResult]: any = await conn.query('SELECT id FROM users WHERE email = ?', ['admin@example.com']);
-        if (adminResult.length > 0) {
-          await conn.query(
-            'INSERT INTO activity_log (user_id, action, entity_type) VALUES (?, ?, ?)',
-            [adminResult[0].id, 'Admin user created', 'system']
-          );
-        }
-      } catch (logError) {
-        console.log('ℹ️  Could not log admin creation (activity_log issue)');
-      }
+      console.log('✅ Admin user created: admin@example.com / admin123');
     } else {
       console.log('✅ Admin user already exists');
     }
 
+    // ==================== VERIFIKASI TABEL ====================
+    console.log('🔍 Verifying table structures...');
+    
+    // Cek users table
+    const [userColumns]: any = await conn.query('DESCRIBE users');
+    console.log(`📊 users table has ${userColumns.length} columns`);
+    
+    // Cek activity_log table
+    try {
+      const [activityColumns]: any = await conn.query('DESCRIBE activity_log');
+      console.log(`📊 activity_log table has ${activityColumns.length} columns`);
+      console.log('🔑 activity_log.id is AUTO_INCREMENT:', 
+        activityColumns.find((col: any) => col.Field === 'id')?.Extra?.includes('auto_increment') ? '✅ YES' : '❌ NO');
+    } catch (e) {
+      console.log('⚠️  Could not verify activity_log table');
+    }
+
     console.log('🎉 Database initialization complete');
+
   } catch (error: any) {
     console.error('❌ Database initialization error:', error.message);
     console.error('SQL Error Code:', error.code);
