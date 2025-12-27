@@ -15,19 +15,47 @@ interface Asset extends RowDataPacket {
   last_maintenance: string | null;
   description: string;
   tags: string[];
+  asset_number: string;
+  serial_number: string;
+  model: string;
+  computer_name: string;
+  owner_name: string;
+  owner_department: string;
+  distribution_status: string;
+  notes: string;
+  file_path: string;
+  file_size: number;
+  mime_type: string;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export const getAllAssets = async (req: Request, res: Response) => {
   try {
-    const { page = 1, limit = 10, category, status, search } = req.query;
+    const { 
+      page = 1, 
+      limit = 10, 
+      category, 
+      status, 
+      distribution_status,
+      search,
+      sortBy = 'created_at',
+      sortOrder = 'DESC'
+    } = req.query;
+    
     const offset = (Number(page) - 1) * Number(limit);
 
     let query = `
-      SELECT a.*, u.name as assigned_to_name 
+      SELECT a.*, 
+        u.name as assigned_to_name,
+        creator.name as created_by_name
       FROM assets a 
-      LEFT JOIN users u ON a.assigned_to = u.id 
+      LEFT JOIN users u ON a.assigned_to = u.id
+      LEFT JOIN users creator ON a.created_by = creator.id
       WHERE 1=1
     `;
+    
     const params: any[] = [];
 
     if (category) {
@@ -40,12 +68,23 @@ export const getAllAssets = async (req: Request, res: Response) => {
       params.push(status);
     }
 
-    if (search) {
-      query += ' AND (a.name LIKE ? OR a.description LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`);
+    if (distribution_status) {
+      query += ' AND a.distribution_status = ?';
+      params.push(distribution_status);
     }
 
-    query += ' ORDER BY a.created_at DESC LIMIT ? OFFSET ?';
+    if (search) {
+      query += ' AND (a.name LIKE ? OR a.description LIKE ? OR a.asset_number LIKE ? OR a.serial_number LIKE ? OR a.computer_name LIKE ?)';
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+
+    // Validate sort column to prevent SQL injection
+    const validSortColumns = ['name', 'created_at', 'updated_at', 'purchase_date', 'value', 'asset_number'];
+    const sortColumn = validSortColumns.includes(sortBy as string) ? sortBy : 'created_at';
+    const order = sortOrder === 'ASC' ? 'ASC' : 'DESC';
+
+    query += ` ORDER BY a.${sortColumn} ${order} LIMIT ? OFFSET ?`;
     params.push(Number(limit), offset);
 
     const [assets] = await pool.query<Asset[]>(query, params);
@@ -64,9 +103,15 @@ export const getAllAssets = async (req: Request, res: Response) => {
       countParams.push(status);
     }
 
+    if (distribution_status) {
+      countQuery += ' AND distribution_status = ?';
+      countParams.push(distribution_status);
+    }
+
     if (search) {
-      countQuery += ' AND (name LIKE ? OR description LIKE ?)';
-      countParams.push(`%${search}%`, `%${search}%`);
+      countQuery += ' AND (name LIKE ? OR description LIKE ? OR asset_number LIKE ? OR serial_number LIKE ? OR computer_name LIKE ?)';
+      const searchTerm = `%${search}%`;
+      countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     const [countResult] = await pool.query<RowDataPacket[]>(countQuery, countParams);
@@ -92,8 +137,9 @@ export const getAssetById = async (req: Request, res: Response) => {
     const { id } = req.params;
 
     const [assets] = await pool.query<Asset[]>(
-      `SELECT a.*, u.name as assigned_to_name, 
-       creator.name as created_by_name
+      `SELECT a.*, 
+        u.name as assigned_to_name, 
+        creator.name as created_by_name
        FROM assets a 
        LEFT JOIN users u ON a.assigned_to = u.id
        LEFT JOIN users creator ON a.created_by = creator.id
@@ -105,7 +151,17 @@ export const getAssetById = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Asset not found' });
     }
 
-    res.json(assets[0]);
+    // Parse tags from string to array if needed
+    const asset = assets[0];
+    if (typeof asset.tags === 'string') {
+      try {
+        asset.tags = JSON.parse(asset.tags);
+      } catch (e) {
+        asset.tags = [];
+      }
+    }
+
+    res.json(asset);
   } catch (error) {
     console.error('Get asset error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -115,40 +171,131 @@ export const getAssetById = async (req: Request, res: Response) => {
 export const createAsset = async (req: Request, res: Response) => {
   try {
     const {
-      name,
-      type,
-      category,
+      name,               // original field name
+      asset_name,         // alternative field name
+      asset_number,
+      serial_number,
+      model,
+      computer_name,
+      owner_name,
+      owner_department,
+      distribution_status = 'available',
+      notes,
+      type = 'other',
+      category = 'general',
       status = 'active',
-      value,
+      value = 0.00,
       assigned_to,
       location,
       purchase_date,
+      last_maintenance,
       description,
-      tags
+      tags = [],
+      file_path,
+      file_size,
+      mime_type
     } = req.body;
 
-    const userId = (req as any).user.userId;
+    const userId = (req as any).user?.userId || (req as any).user?.id || 1;
+
+    // Validate required fields
+    if (!name && !asset_name) {
+      return res.status(400).json({ 
+        message: 'Asset name is required. Please provide either "name" or "asset_name" field.' 
+      });
+    }
+
+    if (!category) {
+      return res.status(400).json({ 
+        message: 'Category is required' 
+      });
+    }
+
+    // Use asset_name if name is not provided (for backward compatibility)
+    const finalName = name || asset_name;
 
     const [result] = await pool.query<ResultSetHeader>(
       `INSERT INTO assets 
-      (name, type, category, status, value, assigned_to, location, purchase_date, description, tags, created_by) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [name, type, category, status, value, assigned_to, location, purchase_date, description, JSON.stringify(tags || []), userId]
+      (name, type, category, status, value, assigned_to, location, 
+       purchase_date, last_maintenance, description, tags, created_by,
+       asset_number, serial_number, model, computer_name,
+       owner_name, owner_department, distribution_status, notes,
+       file_path, file_size, mime_type) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        finalName,
+        type,
+        category,
+        status,
+        value,
+        assigned_to || null,
+        location || null,
+        purchase_date || null,
+        last_maintenance || null,
+        description || null,
+        JSON.stringify(tags),
+        userId,
+        asset_number || null,
+        serial_number || null,
+        model || null,
+        computer_name || null,
+        owner_name || null,
+        owner_department || null,
+        distribution_status,
+        notes || null,
+        file_path || null,
+        file_size || null,
+        mime_type || null
+      ]
     );
 
     // Log activity
     await pool.query(
-      'INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) VALUES (?, ?, ?, ?, ?)',
-      [userId, 'Created new asset', 'asset', result.insertId, JSON.stringify({ name })]
+      `INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        userId, 
+        'Created new asset', 
+        'asset', 
+        result.insertId, 
+        JSON.stringify({ 
+          name: finalName, 
+          asset_number,
+          category,
+          type 
+        })
+      ]
     );
 
     res.status(201).json({
       message: 'Asset created successfully',
-      assetId: result.insertId
+      assetId: result.insertId,
+      data: {
+        id: result.insertId,
+        name: finalName,
+        asset_number,
+        serial_number,
+        category,
+        type,
+        status
+      }
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Create asset error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Request body:', req.body);
+    
+    // Handle duplicate asset number
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ 
+        message: 'Asset number already exists. Please use a unique asset number.' 
+      });
+    }
+
+    res.status(500).json({ 
+      message: 'Server error',
+      error: error.message,
+      sqlMessage: error.sqlMessage
+    });
   }
 };
 
@@ -156,10 +303,32 @@ export const updateAsset = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-    const userId = (req as any).user.userId;
+    const userId = (req as any).user?.userId || (req as any).user?.id;
+
+    // Check if asset exists
+    const [existingAssets] = await pool.query<Asset[]>(
+      'SELECT * FROM assets WHERE id = ?',
+      [id]
+    );
+
+    if (existingAssets.length === 0) {
+      return res.status(404).json({ message: 'Asset not found' });
+    }
+
+    // If asset_name is provided, rename it to name for backward compatibility
+    if (updates.asset_name) {
+      updates.name = updates.asset_name;
+      delete updates.asset_name;
+    }
+
+    // Remove fields that shouldn't be updated
+    delete updates.id;
+    delete updates.created_at;
+    delete updates.updated_at;
+    delete updates.created_by;
 
     // Build dynamic update query
-    const fields = Object.keys(updates).filter(key => key !== 'id');
+    const fields = Object.keys(updates);
     if (fields.length === 0) {
       return res.status(400).json({ message: 'No fields to update' });
     }
@@ -167,37 +336,64 @@ export const updateAsset = async (req: Request, res: Response) => {
     const setClause = fields.map(field => `${field} = ?`).join(', ');
     const values = fields.map(field => {
       if (field === 'tags') {
-        return JSON.stringify(updates[field]);
+        return JSON.stringify(updates[field] || []);
       }
       return updates[field];
     });
 
+    // Add updated_at timestamp
+    const finalSetClause = `${setClause}, updated_at = CURRENT_TIMESTAMP`;
+    
     await pool.query(
-      `UPDATE assets SET ${setClause} WHERE id = ?`,
+      `UPDATE assets SET ${finalSetClause} WHERE id = ?`,
       [...values, id]
     );
 
     // Log activity
     await pool.query(
-      'INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) VALUES (?, ?, ?, ?, ?)',
-      [userId, 'Updated asset', 'asset', id, JSON.stringify(updates)]
+      `INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        userId, 
+        'Updated asset', 
+        'asset', 
+        id, 
+        JSON.stringify({
+          updated_fields: fields,
+          asset_name: updates.name || existingAssets[0].name
+        })
+      ]
     );
 
-    res.json({ message: 'Asset updated successfully' });
-  } catch (error) {
+    res.json({ 
+      message: 'Asset updated successfully',
+      updatedFields: fields 
+    });
+  } catch (error: any) {
     console.error('Update asset error:', error);
-    res.status(500).json({ message: 'Server error' });
+    
+    // Handle duplicate asset number
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ 
+        message: 'Asset number already exists. Please use a unique asset number.' 
+      });
+    }
+
+    res.status(500).json({ 
+      message: 'Server error',
+      error: error.message 
+    });
   }
 };
 
 export const deleteAsset = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const userId = (req as any).user.userId;
+    const userId = (req as any).user?.userId || (req as any).user?.id;
 
-    // Get asset name before deletion
+    // Get asset details before deletion
     const [assets] = await pool.query<Asset[]>(
-      'SELECT name FROM assets WHERE id = ?',
+      'SELECT name, asset_number FROM assets WHERE id = ?',
       [id]
     );
 
@@ -205,15 +401,31 @@ export const deleteAsset = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Asset not found' });
     }
 
+    const assetName = assets[0].name;
+    const assetNumber = assets[0].asset_number;
+
     await pool.query('DELETE FROM assets WHERE id = ?', [id]);
 
     // Log activity
     await pool.query(
-      'INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) VALUES (?, ?, ?, ?, ?)',
-      [userId, 'Deleted asset', 'asset', id, JSON.stringify({ name: assets[0].name })]
+      `INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        userId, 
+        'Deleted asset', 
+        'asset', 
+        id, 
+        JSON.stringify({ 
+          name: assetName, 
+          asset_number: assetNumber 
+        })
+      ]
     );
 
-    res.json({ message: 'Asset deleted successfully' });
+    res.json({ 
+      message: 'Asset deleted successfully',
+      deletedAsset: { id, name: assetName, asset_number: assetNumber }
+    });
   } catch (error) {
     console.error('Delete asset error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -227,15 +439,125 @@ export const getAssetStats = async (req: Request, res: Response) => {
         COUNT(*) as total,
         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
         SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END) as inactive,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
         SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) as maintenance,
+        SUM(CASE WHEN status = 'retired' THEN 1 ELSE 0 END) as retired,
+        SUM(CASE WHEN status = 'disposed' THEN 1 ELSE 0 END) as disposed,
+        SUM(CASE WHEN distribution_status = 'available' THEN 1 ELSE 0 END) as available,
+        SUM(CASE WHEN distribution_status = 'assigned' THEN 1 ELSE 0 END) as assigned,
+        SUM(CASE WHEN distribution_status = 'reserved' THEN 1 ELSE 0 END) as reserved,
+        SUM(CASE WHEN distribution_status = 'in_repair' THEN 1 ELSE 0 END) as in_repair,
+        SUM(CASE WHEN distribution_status = 'lost' THEN 1 ELSE 0 END) as lost,
+        SUM(CASE WHEN distribution_status = 'damaged' THEN 1 ELSE 0 END) as damaged,
         SUM(value) as total_value,
-        COUNT(DISTINCT category) as categories
+        COUNT(DISTINCT category) as categories,
+        COUNT(DISTINCT type) as types
       FROM assets
     `);
 
     res.json(stats[0]);
   } catch (error) {
     console.error('Get asset stats error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+export const searchAssets = async (req: Request, res: Response) => {
+  try {
+    const { q } = req.query;
+    
+    if (!q || typeof q !== 'string') {
+      return res.status(400).json({ message: 'Search query is required' });
+    }
+
+    const searchTerm = `%${q}%`;
+    
+    const [assets] = await pool.query<Asset[]>(
+      `SELECT id, name, asset_number, serial_number, category, status, 
+              location, assigned_to, distribution_status
+       FROM assets 
+       WHERE name LIKE ? 
+          OR asset_number LIKE ? 
+          OR serial_number LIKE ? 
+          OR computer_name LIKE ?
+          OR model LIKE ?
+          OR owner_name LIKE ?
+       LIMIT 20`,
+      [searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm]
+    );
+
+    res.json({ assets });
+  } catch (error) {
+    console.error('Search assets error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+export const exportAssets = async (req: Request, res: Response) => {
+  try {
+    const [assets] = await pool.query<Asset[]>(`
+      SELECT 
+        a.asset_number,
+        a.name,
+        a.serial_number,
+        a.model,
+        a.computer_name,
+        a.category,
+        a.type,
+        a.status,
+        a.distribution_status,
+        a.value,
+        a.location,
+        a.purchase_date,
+        a.owner_name,
+        a.owner_department,
+        u.name as assigned_to_name,
+        a.description,
+        a.notes,
+        a.created_at,
+        a.updated_at
+      FROM assets a
+      LEFT JOIN users u ON a.assigned_to = u.id
+      ORDER BY a.created_at DESC
+    `);
+
+    // Convert to CSV format (simplified)
+    const csvHeaders = [
+      'Asset Number', 'Name', 'Serial Number', 'Model', 'Computer Name',
+      'Category', 'Type', 'Status', 'Distribution Status', 'Value',
+      'Location', 'Purchase Date', 'Owner Name', 'Owner Department',
+      'Assigned To', 'Description', 'Notes', 'Created At', 'Updated At'
+    ].join(',');
+
+    const csvRows = assets.map(asset => [
+      asset.asset_number || '',
+      asset.name,
+      asset.serial_number || '',
+      asset.model || '',
+      asset.computer_name || '',
+      asset.category,
+      asset.type,
+      asset.status,
+      asset.distribution_status,
+      asset.value || 0,
+      asset.location || '',
+      asset.purchase_date || '',
+      asset.owner_name || '',
+      asset.owner_department || '',
+      asset.assigned_to_name || '',
+      `"${(asset.description || '').replace(/"/g, '""')}"`,
+      `"${(asset.notes || '').replace(/"/g, '""')}"`,
+      asset.created_at,
+      asset.updated_at || ''
+    ].join(','));
+
+    const csvContent = [csvHeaders, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=assets_export.csv');
+    res.send(csvContent);
+  } catch (error) {
+    console.error('Export assets error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
