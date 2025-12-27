@@ -154,6 +154,67 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ assets table ready');
 
+    // ==================== LIBRARY_ITEMS TABLE ====================
+console.log('🔍 Creating/verifying library_items table...');
+
+try {
+  // Drop dan buat ulang untuk pastikan AUTO_INCREMENT ada
+  await conn.query('DROP TABLE IF EXISTS library_items');
+  console.log('🗑️  Dropped old library_items table');
+  
+  await conn.query(`
+    CREATE TABLE library_items (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      title VARCHAR(255) NOT NULL,
+      type VARCHAR(100) NOT NULL,
+      file_size BIGINT,
+      file_path VARCHAR(500),
+      mime_type VARCHAR(100),
+      uploaded_by INT,
+      description TEXT,
+      tags JSON,
+      downloads INT DEFAULT 0,
+      views INT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_uploaded_by (uploaded_by),
+      INDEX idx_type (type),
+      INDEX idx_created_at (created_at),
+      FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB AUTO_INCREMENT=1
+  `);
+  
+  console.log('✅ library_items table created with AUTO_INCREMENT');
+  
+} catch (libraryError: any) {
+  console.error('❌ Error creating library_items table:', libraryError.message);
+  
+  // Coba buat tanpa foreign key jika error
+  try {
+    console.log('🔄 Trying alternative: library_items without foreign key...');
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS library_items (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        type VARCHAR(100) NOT NULL,
+        file_size BIGINT,
+        file_path VARCHAR(500),
+        mime_type VARCHAR(100),
+        uploaded_by INT,
+        description TEXT,
+        tags JSON,
+        downloads INT DEFAULT 0,
+        views INT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ library_items table created (without foreign key)');
+  } catch (altError: any) {
+    console.error('❌ Alternative method also failed:', altError.message);
+  }
+}
+
     // ==================== CREATE ADMIN USER ====================
     console.log('👑 Checking admin user...');
     const [users]: any = await conn.query('SELECT COUNT(*) as count FROM users WHERE email = ?', ['admin@example.com']);
