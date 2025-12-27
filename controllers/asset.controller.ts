@@ -353,10 +353,16 @@ export const createAsset = async (req: Request, res: Response) => {
   }
 };
 export const updateAsset = async (req: Request, res: Response) => {
+  console.log('🟡 UPDATE ASSET REQUEST RECEIVED');
+  console.log('📦 Request Body:', req.body);
+  console.log('🔢 Asset ID:', req.params.id);
+
   try {
     const { id } = req.params;
-    const updates = req.body;
+    let updates = { ...req.body };
     const userId = (req as any).user?.userId || (req as any).user?.id;
+
+    console.log('👤 User ID:', userId);
 
     // Check if asset exists
     const [existingAssets] = await pool.query<Asset[]>(
@@ -365,14 +371,48 @@ export const updateAsset = async (req: Request, res: Response) => {
     );
 
     if (existingAssets.length === 0) {
-      return res.status(404).json({ message: 'Asset not found' });
+      console.log('❌ Asset not found:', id);
+      return res.status(404).json({ 
+        success: false,
+        message: 'Asset not found' 
+      });
     }
 
-    // If asset_name is provided, rename it to name for backward compatibility
+    console.log('✅ Asset found:', existingAssets[0].name);
+
+    // Handle field name mappings for backward compatibility
     if (updates.asset_name) {
       updates.name = updates.asset_name;
       delete updates.asset_name;
     }
+
+    // Map purchase_value to value (handle frontend field name mismatch)
+    if (updates.purchase_value !== undefined) {
+      updates.value = updates.purchase_value;
+      delete updates.purchase_value;
+    }
+
+    // Map other possible field name variations
+    const fieldMappings: { [key: string]: string } = {
+      'purchase_value': 'value',
+      'asset_name': 'name',
+      'assetName': 'name',
+      'assetCategory': 'category',
+      'assetType': 'type',
+      'assetStatus': 'status',
+      'assetLocation': 'location',
+      'assetValue': 'value'
+    };
+
+    // Apply field mappings
+    Object.keys(fieldMappings).forEach(oldField => {
+      if (updates[oldField] !== undefined) {
+        updates[fieldMappings[oldField]] = updates[oldField];
+        delete updates[oldField];
+      }
+    });
+
+    console.log('📋 Updates after field mapping:', updates);
 
     // Remove fields that shouldn't be updated
     delete updates.id;
@@ -380,61 +420,147 @@ export const updateAsset = async (req: Request, res: Response) => {
     delete updates.updated_at;
     delete updates.created_by;
 
-    // Build dynamic update query
-    const fields = Object.keys(updates);
+    // Validate fields against actual table columns
+    const validColumns = [
+      'name', 'type', 'category', 'status', 'value', 'assigned_to', 
+      'location', 'purchase_date', 'last_maintenance', 'description', 
+      'tags', 'asset_number', 'serial_number', 'model', 'computer_name',
+      'owner_name', 'owner_department', 'distribution_status', 'notes',
+      'file_path', 'file_size', 'mime_type'
+    ];
+
+    const filteredUpdates: any = {};
+    Object.keys(updates).forEach(key => {
+      if (validColumns.includes(key)) {
+        filteredUpdates[key] = updates[key];
+      } else {
+        console.warn(`⚠️ Skipping invalid column: ${key}`);
+      }
+    });
+
+    console.log('✅ Valid updates to apply:', filteredUpdates);
+
+    // Check if there are any valid fields to update
+    const fields = Object.keys(filteredUpdates);
     if (fields.length === 0) {
-      return res.status(400).json({ message: 'No fields to update' });
+      console.log('⚠️ No valid fields to update');
+      return res.status(400).json({ 
+        success: false,
+        message: 'No valid fields to update' 
+      });
     }
 
-    const setClause = fields.map(field => `${field} = ?`).join(', ');
+    // Prepare values for SQL query
     const values = fields.map(field => {
       if (field === 'tags') {
-        return JSON.stringify(updates[field] || []);
+        return JSON.stringify(filteredUpdates[field] || []);
       }
-      return updates[field];
+      return filteredUpdates[field];
     });
 
-    // Add updated_at timestamp
+    const setClause = fields.map(field => `${field} = ?`).join(', ');
     const finalSetClause = `${setClause}, updated_at = CURRENT_TIMESTAMP`;
     
-    await pool.query(
-      `UPDATE assets SET ${finalSetClause} WHERE id = ?`,
-      [...values, id]
-    );
+    const sql = `UPDATE assets SET ${finalSetClause} WHERE id = ?`;
+    const sqlValues = [...values, id];
+
+    console.log('🚀 Executing SQL:', sql);
+    console.log('📋 SQL Values:', sqlValues);
+
+    const [result] = await pool.query<ResultSetHeader>(sql, sqlValues);
+    
+    console.log('✅ Asset updated successfully');
+    console.log('📊 Update result:', result);
 
     // Log activity
-    await pool.query(
-      `INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) 
-       VALUES (?, ?, ?, ?, ?)`,
-      [
-        userId, 
-        'Updated asset', 
-        'asset', 
-        id, 
-        JSON.stringify({
-          updated_fields: fields,
-          asset_name: updates.name || existingAssets[0].name
-        })
-      ]
+    try {
+      console.log('📝 Logging activity...');
+      await pool.query(
+        `INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) 
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          userId, 
+          'Updated asset', 
+          'asset', 
+          id, 
+          JSON.stringify({
+            updated_fields: fields,
+            asset_name: filteredUpdates.name || existingAssets[0].name,
+            asset_number: filteredUpdates.asset_number || existingAssets[0].asset_number
+          })
+        ]
+      );
+      console.log('✅ Activity logged successfully');
+    } catch (logError: any) {
+      console.warn('⚠️ Activity log failed (non-critical):', logError.message);
+    }
+
+    // Get updated asset
+    const [updatedAssets] = await pool.query<Asset[]>(
+      `SELECT a.*, 
+        u.name as assigned_to_name, 
+        creator.name as created_by_name
+       FROM assets a 
+       LEFT JOIN users u ON a.assigned_to = u.id
+       LEFT JOIN users creator ON a.created_by = creator.id
+       WHERE a.id = ?`,
+      [id]
     );
 
-    res.json({ 
-      message: 'Asset updated successfully',
-      updatedFields: fields 
-    });
-  } catch (error: any) {
-    console.error('Update asset error:', error);
+    const updatedAsset = updatedAssets[0];
     
-    // Handle duplicate asset number
+    // Parse tags if needed
+    if (updatedAsset && typeof updatedAsset.tags === 'string') {
+      try {
+        updatedAsset.tags = JSON.parse(updatedAsset.tags);
+      } catch (e) {
+        updatedAsset.tags = [];
+      }
+    }
+
+    console.log('📤 Sending success response...');
+    res.json({ 
+      success: true,
+      message: 'Asset updated successfully',
+      updatedFields: fields,
+      data: updatedAsset
+    });
+
+  } catch (error: any) {
+    console.error('❌ UPDATE ASSET ERROR:');
+    console.error('🔴 Error Message:', error.message);
+    console.error('🔴 Error Code:', error.code);
+    console.error('🔴 SQL Message:', error.sqlMessage);
+    console.error('🔴 SQL:', error.sql);
+    
+    // Handle specific errors
     if (error.code === 'ER_DUP_ENTRY') {
+      console.error('🔴 Duplicate entry error');
       return res.status(400).json({ 
+        success: false,
         message: 'Asset number already exists. Please use a unique asset number.' 
       });
     }
 
+    if (error.code === 'ER_BAD_FIELD_ERROR') {
+      console.error('🔴 Invalid field error');
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid field in update request. Please check field names.',
+        hint: 'Use field names: name, type, category, status, value, location, etc.'
+      });
+    }
+
+    // Return generic error
+    console.error('🔴 Returning error response');
     res.status(500).json({ 
-      message: 'Server error',
-      error: error.message 
+      success: false,
+      message: 'Failed to update asset',
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        code: error.code,
+        sqlMessage: error.sqlMessage
+      } : undefined
     });
   }
 };
