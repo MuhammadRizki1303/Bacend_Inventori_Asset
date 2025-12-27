@@ -1,90 +1,139 @@
-// middleware/auth.middleware.ts
+// auth.middleware.ts - VERSI FIX TYPE ERROR
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import jwt, { JwtPayload } from 'jsonwebtoken';
 
 export interface AuthRequest extends Request {
-  user?: any;
+  user?: {
+    userId?: number;
+    id?: number;
+    email: string;
+    name?: string;
+    role: string;
+    exp?: number;
+    iat?: number;
+  };
 }
 
 export const authenticateToken = (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    // Debug log
-    console.log('🔐 Auth middleware checking...');
-    console.log('Headers:', req.headers);
+    console.log('🔐 === AUTH MIDDLEWARE ===');
+    console.log('Method:', req.method);
+    console.log('Path:', req.path);
     
     // Ambil token dari Authorization header
     const authHeader = req.headers.authorization;
-    console.log('Auth header:', authHeader);
+    console.log('Authorization Header:', authHeader);
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       console.log('❌ No Bearer token found');
       return res.status(401).json({ 
         success: false,
-        message: 'Authentication required. Please login.' 
+        message: 'Authentication required. Please login first.',
+        code: 'NO_TOKEN'
       });
     }
     
-    const token = authHeader.split(' ')[1];
-    console.log('Token extracted:', token ? 'Yes' : 'No');
+    const token = authHeader.substring(7); // Remove "Bearer "
     
-    if (!token) {
-      console.log('❌ Empty token');
+    if (!token || token.trim().length === 0) {
+      console.log('❌ Token is empty');
       return res.status(401).json({ 
         success: false,
-        message: 'Authentication token required' 
+        message: 'Invalid token format',
+        code: 'EMPTY_TOKEN'
       });
     }
     
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret-key-12345');
-    console.log('✅ Token verified:', decoded);
+    const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-key-12345';
     
-    req.user = decoded;
+    // FIX: Cast decoded ke JwtPayload
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    
+    console.log('✅ Token verified:', {
+      userId: decoded.userId || decoded.id,
+      email: decoded.email,
+      role: decoded.role
+    });
+    
+    // FIX: Assign ke req.user dengan type yang benar
+    req.user = {
+      userId: decoded.userId || decoded.id,
+      id: decoded.userId || decoded.id,
+      email: decoded.email,
+      name: decoded.name,
+      role: decoded.role,
+      exp: decoded.exp,
+      iat: decoded.iat
+    };
+    
     next();
     
   } catch (error: any) {
-    console.error('❌ Token verification error:', error.message);
+    console.error('❌ Token verification failed:', error.message);
     
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({ 
         success: false,
-        message: 'Token expired. Please login again.' 
+        message: 'Token expired. Please login again.',
+        code: 'TOKEN_EXPIRED'
       });
     }
     
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ 
         success: false,
-        message: 'Invalid token. Please login again.' 
+        message: 'Invalid token. Please login again.',
+        code: 'INVALID_TOKEN'
       });
     }
     
     return res.status(401).json({ 
       success: false,
-      message: 'Authentication failed' 
+      message: 'Authentication failed',
+      code: 'AUTH_FAILED'
     });
   }
 };
 
-export const authorizeRoles = (...allowedRoles: string[]) => {
+export const authorizeRole = (...roles: string[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ 
         success: false,
-        message: 'User not authenticated' 
+        message: 'User not authenticated',
+        code: 'NO_USER'
       });
     }
-    
+
     const userRole = req.user.role;
-    console.log('User role:', userRole, 'Allowed roles:', allowedRoles);
     
-    if (!allowedRoles.includes(userRole)) {
+    if (!roles.includes(userRole)) {
+      console.log(`❌ Access denied for role: ${userRole}`);
       return res.status(403).json({ 
         success: false,
-        message: `Access forbidden. Required roles: ${allowedRoles.join(', ')}` 
+        message: `Access forbidden. Required role: ${roles.join(' or ')}`,
+        code: 'INSUFFICIENT_PERMISSIONS'
       });
     }
     
     next();
   };
+};
+
+// OPTIONAL: Middleware untuk bypass auth di development
+export const devAuth = (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (process.env.NODE_ENV === 'development' || process.env.DISABLE_AUTH === 'true') {
+    req.user = {
+      userId: 1,
+      id: 1,
+      email: 'admin@example.com',
+      name: 'Administrator',
+      role: 'Admin'
+    };
+    console.log('⚠️  DEVELOPMENT: Auth bypassed');
+    next();
+  } else {
+    authenticateToken(req, res, next);
+  }
 };
