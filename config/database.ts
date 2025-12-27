@@ -78,7 +78,7 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ users table ready');
 
-    // ==================== DEVICE_STOCKS TABLE ====================
+    // ==================== DEVICE_STOCKS TABLE (Tabel untuk stok keseluruhan) ====================
     console.log('📦 Creating device_stocks table...');
     await conn.query(`
       CREATE TABLE IF NOT EXISTS device_stocks (
@@ -97,71 +97,35 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ device_stocks table ready');
 
-    // ==================== BORROWINGS TABLE ====================
-    console.log('📦 Creating borrowings table...');
+    // ==================== DEVICE_STOCK TABLE (Tabel untuk tracking perangkat individual) ====================
+    console.log('📦 Creating device_stock table (individual devices)...');
     await conn.query(`
-      CREATE TABLE IF NOT EXISTS borrowings (
+      CREATE TABLE IF NOT EXISTS device_stock (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        employee_name VARCHAR(255) NOT NULL,
-        device_id INT NOT NULL,
-        device_name VARCHAR(255) NOT NULL,
-        quantity INT NOT NULL DEFAULT 1,
-        borrow_date DATE NOT NULL,
-        return_date DATE,
-        status ENUM('borrowed', 'returned', 'overdue') DEFAULT 'borrowed',
+        device_stocks_id INT NOT NULL,
+        serial_number VARCHAR(100) UNIQUE NOT NULL,
+        asset_tag VARCHAR(100),
+        status ENUM('available', 'borrowed', 'maintenance', 'retired', 'lost') DEFAULT 'available',
+        condition ENUM('excellent', 'good', 'fair', 'poor') DEFAULT 'good',
+        purchase_date DATE,
+        purchase_price DECIMAL(10,2),
+        warranty_expiry DATE,
         notes TEXT,
+        last_maintenance_date DATE,
+        next_maintenance_date DATE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_device_id (device_id),
+        INDEX idx_device_stocks_id (device_stocks_id),
+        INDEX idx_serial_number (serial_number),
         INDEX idx_status (status),
-        INDEX idx_employee (employee_name),
-        INDEX idx_borrow_date (borrow_date),
-        FOREIGN KEY (device_id) REFERENCES device_stocks(id) ON DELETE CASCADE
+        INDEX idx_condition (condition),
+        FOREIGN KEY (device_stocks_id) REFERENCES device_stocks(id) ON DELETE CASCADE
       ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
-    console.log('✅ borrowings table ready');
-
-    // ==================== ASSETS TABLE ====================
-    console.log('📦 Creating assets table...');
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS assets (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        type VARCHAR(100) NOT NULL,
-        category VARCHAR(100) NOT NULL,
-        status VARCHAR(20) DEFAULT 'active',
-        value DECIMAL(10,2) DEFAULT 0.00,
-        location VARCHAR(255),
-        description TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB AUTO_INCREMENT=1
-    `);
-    console.log('✅ assets table ready');
+    console.log('✅ device_stock table ready');
 
     // ==================== LIBRARY_ITEMS TABLE ====================
-    console.log('📦 Creating library_items table...');
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS library_items (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        title VARCHAR(255) NOT NULL,
-        type VARCHAR(100) NOT NULL,
-        file_size BIGINT,
-        file_path VARCHAR(500),
-        mime_type VARCHAR(100),
-        uploaded_by INT,
-        description TEXT,
-        tags JSON,
-        downloads INT DEFAULT 0,
-        views INT DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_uploaded_by (uploaded_by),
-        INDEX idx_type (type),
-        FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
-      ) ENGINE=InnoDB AUTO_INCREMENT=1
-    `);
-    console.log('✅ library_items table ready');
+    
 
     // ==================== ACTIVITY_LOG TABLE ====================
     console.log('📦 Creating activity_log table...');
@@ -170,7 +134,7 @@ export const initDatabase = async (): Promise<void> => {
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT,
         action VARCHAR(255) NOT NULL,
-        entity_type ENUM('user', 'asset', 'library', 'device', 'borrowing', 'system') DEFAULT 'user',
+        entity_type ENUM('user', 'asset', 'library', 'device', 'device_stock', 'borrowing', 'system') DEFAULT 'user',
         entity_id INT,
         details LONGTEXT,
         ip_address VARCHAR(45),
@@ -201,7 +165,7 @@ export const initDatabase = async (): Promise<void> => {
 
     // ==================== VERIFIKASI SEMUA TABEL ====================
     console.log('\n🔍 Verifying all table structures...');
-    const tables = ['users', 'device_stocks', 'borrowings', 'assets', 'library_items', 'activity_log'];
+    const tables = ['users', 'device_stocks', 'device_stock', 'borrowings', 'assets', 'library_items', 'activity_log', 'maintenance_log'];
     
     for (const table of tables) {
       try {
