@@ -1,103 +1,43 @@
-import mysql from 'mysql2/promise';
+import mysql, { Pool, PoolConnection } from 'mysql2/promise';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
-console.log('🔧 Starting database initialization...');
-
-// Gunakan connection string langsung dari Railway
+// Gunakan environment variables yang sesuai
 const connectionString = process.env.MYSQL_PUBLIC_URL || 
-  'mysql://root:pQpGmoZMExdKtjQeGrlNSnJPoMlrHcMw@hopper.proxy.rlwy.net:41017/railway';
+  `mysql://${process.env.MYSQLUSER || 'root'}:${process.env.MYSQLPASSWORD || ''}@${process.env.MYSQLHOST || 'localhost'}:${process.env.MYSQLPORT || 3306}/${process.env.MYSQLDATABASE || 'railway'}`;
 
-console.log('🔗 Using connection string (hidden password):', 
-  connectionString.replace(/:[^:@]+@/, ':****@'));
+console.log('🔗 Database connection string:', 
+  connectionString.replace(/:([^:@]+)@/, ':****@')); // Hide password
 
-// Method 1: Gunakan connection string langsung (paling aman)
-let pool;
-try {
-  console.log('🔄 Creating database pool...');
-  
-  // Opsi 1: Dengan connection string langsung
-  pool = mysql.createPool(connectionString);
-  
-  // Opsi 2: Atau dengan konfigurasi object (pilih salah satu)
-  // pool = mysql.createPool({
-  //   host: 'hopper.proxy.rlwy.net',
-  //   port: 41017,
-  //   user: 'root',
-  //   password: 'pQpGmoZMExdKtjQeGrlNSnJPoMlrHcMw',
-  //   database: 'railway',
-  //   ssl: {
-  //     rejectUnauthorized: false
-  //   },
-  //   waitForConnections: true,
-  //   connectionLimit: 10,
-  //   queueLimit: 0
-  // });
-  
-  console.log('✅ Database pool created successfully');
-} catch (error: any) {
-  console.error('❌ Error creating database pool:', error.message);
-  process.exit(1);
-}
+// Buat pool dengan tipe yang benar
+export const pool: Pool = mysql.createPool(connectionString);
+
+console.log('✅ Database pool created successfully');
 
 // CREATE ALL REQUIRED TABLES (Hanya untuk development/initial setup)
-const initializeDatabase = async () => {
+const initializeDatabase = async (): Promise<void> => {
   // Skip in production unless explicitly forced
   if (process.env.NODE_ENV === 'production' && !process.env.FORCE_DB_INIT) {
     console.log('📊 Skipping table creation in production');
     return;
   }
 
-  let conn;
+  let conn: PoolConnection | null = null;
   try {
     console.log('🔄 Checking database tables...');
     conn = await pool.getConnection();
 
     // 1. Users table
-    try {
-      const [userTables]: any = await conn.query(`
-        SELECT COUNT(*) as count FROM information_schema.tables 
-        WHERE table_schema = DATABASE() AND table_name = 'users'
-      `);
-      
-      if (userTables[0].count === 0) {
-        await conn.query(`
-          CREATE TABLE users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL,
-            phone VARCHAR(50),
-            role VARCHAR(20) DEFAULT 'User',
-            status VARCHAR(20) DEFAULT 'Active',
-            department VARCHAR(100),
-            email_verified BOOLEAN DEFAULT FALSE,
-            verification_token VARCHAR(255),
-            token_expiry DATETIME,
-            last_login DATETIME,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-          )
-        `);
-        console.log('✅ users table created');
-        
-        // Insert admin user
-        const hashedPassword = await bcrypt.hash('admin123', 10);
-        await conn.query(`
-          INSERT INTO users (name, email, password, role, email_verified, status) 
-          VALUES ('Administrator', 'admin@example.com', ?, 'Admin', TRUE, 'Active')
-        `, [hashedPassword]);
-        console.log('✅ admin user created');
-      } else {
-        console.log('📊 users table already exists');
-      }
-    } catch (error: any) {
-      console.log('ℹ️  Checking users table:', error.message);
-      // Create table if not exists
+    const [userTables]: any = await conn.query(`
+      SELECT COUNT(*) as count FROM information_schema.tables 
+      WHERE table_schema = DATABASE() AND table_name = 'users'
+    `);
+    
+    if (userTables[0].count === 0) {
       await conn.query(`
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE users (
           id INT AUTO_INCREMENT PRIMARY KEY,
           name VARCHAR(255) NOT NULL,
           email VARCHAR(255) UNIQUE NOT NULL,
@@ -114,10 +54,20 @@ const initializeDatabase = async () => {
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
       `);
-      console.log('✅ users table created/verified');
+      console.log('✅ users table created');
+      
+      // Insert admin user
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      await conn.query(`
+        INSERT INTO users (name, email, password, role, email_verified, status) 
+        VALUES ('Administrator', 'admin@example.com', ?, 'Admin', TRUE, 'Active')
+      `, [hashedPassword]);
+      console.log('✅ admin user created');
+    } else {
+      console.log('📊 users table already exists');
     }
 
-    // 2. Create other tables with IF NOT EXISTS (lebih aman)
+    // 2. Check other tables (tidak perlu DROP TABLE)
     const tables = [
       { name: 'activity_log', sql: `
         CREATE TABLE IF NOT EXISTS activity_log (
@@ -211,32 +161,34 @@ const initializeDatabase = async () => {
     ];
 
     for (const table of tables) {
-      try {
+      const [tableExists]: any = await conn.query(`
+        SELECT COUNT(*) as count FROM information_schema.tables 
+        WHERE table_schema = DATABASE() AND table_name = ?
+      `, [table.name]);
+      
+      if (tableExists[0].count === 0) {
         await conn.query(table.sql);
-        console.log(`✅ ${table.name} table created/verified`);
-      } catch (error: any) {
-        console.error(`❌ Error creating ${table.name}:`, error.message);
+        console.log(`✅ ${table.name} table created`);
+      } else {
+        console.log(`📊 ${table.name} table already exists`);
       }
     }
 
-    // Check and insert sample data
-    try {
-      const [stockCount]: any = await conn.query('SELECT COUNT(*) as count FROM device_stocks');
-      if (stockCount[0].count === 0) {
-        await conn.query(`
-          INSERT INTO device_stocks (name, category, total_stock, available_stock) 
-          VALUES ('Laptop Dell', 'Electronics', 5, 5)
-        `);
-        console.log('✅ sample device stock created');
-      }
-    } catch (error) {
-      console.log('ℹ️  Skipping sample data insertion');
+    // Insert sample data only if tables were empty
+    const [stockCount]: any = await conn.query('SELECT COUNT(*) as count FROM device_stocks');
+    if (stockCount[0].count === 0) {
+      await conn.query(`
+        INSERT INTO device_stocks (name, category, total_stock, available_stock) 
+        VALUES ('Laptop Dell', 'Electronics', 5, 5)
+      `);
+      console.log('✅ sample device stock created');
     }
 
     console.log('🎉 Database initialization completed!');
 
   } catch (error: any) {
-    console.error('❌ Error during database initialization:', error.message);
+    console.error('❌ Error initializing database:', error.message);
+    console.error('Full error:', error);
   } finally {
     if (conn) {
       conn.release();
@@ -245,52 +197,50 @@ const initializeDatabase = async () => {
 };
 
 // Test database connection
-const testConnection = async () => {
-  let retries = 3;
-  for (let i = 1; i <= retries; i++) {
+const testConnection = async (): Promise<void> => {
+  let retries = 5;
+  while (retries > 0) {
+    let conn: PoolConnection | null = null;
     try {
-      console.log(`🔄 Testing database connection (attempt ${i}/${retries})...`);
-      const conn = await pool.getConnection();
-      const [result]: any = await conn.query('SELECT NOW() as current_time, DATABASE() as db_name');
-      conn.release();
+      console.log(`🔄 Testing database connection (attempts left: ${retries})...`);
+      conn = await pool.getConnection();
+      const [result]: any = await conn.query('SELECT 1 as connected');
       
-      console.log('✅ Database connected successfully!');
-      console.log('📊 Database info:', result[0]);
+      console.log('✅ Database connected successfully');
+      console.log(`📊 Connection test result:`, result[0]);
       
-      // Initialize tables
+      // Initialize database tables
       await initializeDatabase();
-      return true;
+      return;
     } catch (error: any) {
-      console.error(`❌ Connection attempt ${i} failed:`, error.message);
+      retries--;
+      console.error(`❌ Database connection failed (${5 - retries}/5):`, error.message);
       
-      if (i === retries) {
-        console.error('💥 All connection attempts failed');
+      if (retries === 0) {
+        console.error('💥 Failed to connect to database after 5 attempts');
         if (process.env.NODE_ENV === 'development') {
           process.exit(1);
         }
-        return false;
+        // In production, continue without database (optional)
+      } else {
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
-      
-      // Wait 2 seconds before retrying
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    } finally {
+      if (conn) {
+        conn.release();
+      }
     }
   }
 };
 
 // Run connection test on startup
-testConnection();
+testConnection().catch(error => {
+  console.error('💥 Failed to initialize database:', error);
+});
 
-// Optional: Periodic connection check (setiap 5 menit)
-if (process.env.NODE_ENV === 'production') {
-  setInterval(async () => {
-    try {
-      const conn = await pool.getConnection();
-      conn.release();
-    } catch (error) {
-      console.error('❌ Periodic connection check failed:', error);
-    }
-  }, 5 * 60 * 1000); // 5 minutes
-}
+// Export types
+export type { PoolConnection };
 
-// Export pool
+// Export default
 export default pool;
