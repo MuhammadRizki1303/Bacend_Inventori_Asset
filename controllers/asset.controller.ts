@@ -169,10 +169,14 @@ export const getAssetById = async (req: Request, res: Response) => {
 };
 
 export const createAsset = async (req: Request, res: Response) => {
+  console.log('🟢 CREATE ASSET REQUEST RECEIVED');
+  console.log('📦 Request Body:', req.body);
+  console.log('👤 User:', (req as any).user);
+
   try {
     const {
-      name,               // original field name
-      asset_name,         // alternative field name
+      name,
+      asset_name,
       asset_number,
       serial_number,
       model,
@@ -197,108 +201,157 @@ export const createAsset = async (req: Request, res: Response) => {
     } = req.body;
 
     const userId = (req as any).user?.userId || (req as any).user?.id || 1;
+    console.log(`👤 Using User ID: ${userId}`);
 
     // Validate required fields
     if (!name && !asset_name) {
+      console.log('❌ Validation failed: No name provided');
       return res.status(400).json({ 
+        success: false,
         message: 'Asset name is required. Please provide either "name" or "asset_name" field.' 
       });
     }
 
     if (!category) {
+      console.log('❌ Validation failed: No category provided');
       return res.status(400).json({ 
+        success: false,
         message: 'Category is required' 
       });
     }
 
     // Use asset_name if name is not provided (for backward compatibility)
     const finalName = name || asset_name;
+    console.log(`📝 Final asset name: ${finalName}`);
 
-    const [result] = await pool.query<ResultSetHeader>(
-      `INSERT INTO assets 
+    console.log('📊 Preparing SQL query...');
+    const sql = `INSERT INTO assets 
       (name, type, category, status, value, assigned_to, location, 
        purchase_date, last_maintenance, description, tags, created_by,
        asset_number, serial_number, model, computer_name,
        owner_name, owner_department, distribution_status, notes,
        file_path, file_size, mime_type) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        finalName,
-        type,
-        category,
-        status,
-        value,
-        assigned_to || null,
-        location || null,
-        purchase_date || null,
-        last_maintenance || null,
-        description || null,
-        JSON.stringify(tags),
-        userId,
-        asset_number || null,
-        serial_number || null,
-        model || null,
-        computer_name || null,
-        owner_name || null,
-        owner_department || null,
-        distribution_status,
-        notes || null,
-        file_path || null,
-        file_size || null,
-        mime_type || null
-      ]
-    );
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-    // Log activity
-    await pool.query(
-      `INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) 
-       VALUES (?, ?, ?, ?, ?)`,
-      [
-        userId, 
-        'Created new asset', 
-        'asset', 
-        result.insertId, 
-        JSON.stringify({ 
-          name: finalName, 
-          asset_number,
-          category,
-          type 
-        })
-      ]
-    );
+    const values = [
+      finalName,
+      type,
+      category,
+      status,
+      value,
+      assigned_to || null,
+      location || null,
+      purchase_date || null,
+      last_maintenance || null,
+      description || null,
+      JSON.stringify(tags),
+      userId,
+      asset_number || null,
+      serial_number || null,
+      model || null,
+      computer_name || null,
+      owner_name || null,
+      owner_department || null,
+      distribution_status,
+      notes || null,
+      file_path || null,
+      file_size || null,
+      mime_type || null
+    ];
 
-    res.status(201).json({
+    console.log('📋 SQL Values:', values);
+    console.log('🚀 Executing SQL query...');
+
+    const [result] = await pool.query<ResultSetHeader>(sql, values);
+    const assetId = result.insertId;
+    
+    console.log(`✅ Asset inserted successfully! ID: ${assetId}`);
+    console.log(`📊 Result:`, result);
+
+    // Log activity (try-catch to prevent activity log failure from breaking response)
+    try {
+      console.log('📝 Logging activity...');
+      await pool.query(
+        `INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) 
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          userId, 
+          'Created new asset', 
+          'asset', 
+          assetId, 
+          JSON.stringify({ 
+            name: finalName, 
+            asset_number,
+            category,
+            type 
+          })
+        ]
+      );
+      console.log('✅ Activity logged successfully');
+    } catch (logError: any) {
+      console.warn('⚠️ Activity log failed (non-critical):', logError.message);
+      console.warn('⚠️ Log error details:', logError);
+      // Continue even if activity log fails - don't break the response
+    }
+
+    // Return SUCCESS response
+    console.log('📤 Sending success response...');
+    return res.status(201).json({
+      success: true,
       message: 'Asset created successfully',
-      assetId: result.insertId,
+      assetId: assetId,
       data: {
-        id: result.insertId,
+        id: assetId,
         name: finalName,
         asset_number,
         serial_number,
         category,
         type,
-        status
+        status,
+        distribution_status,
+        created_by: userId,
+        created_at: new Date().toISOString()
       }
     });
+
   } catch (error: any) {
-    console.error('Create asset error:', error);
-    console.error('Request body:', req.body);
+    console.error('❌ CREATE ASSET ERROR:');
+    console.error('🔴 Error Message:', error.message);
+    console.error('🔴 Error Code:', error.code);
+    console.error('🔴 SQL Message:', error.sqlMessage);
+    console.error('🔴 SQL:', error.sql);
+    console.error('🔴 Stack:', error.stack);
     
-    // Handle duplicate asset number
+    // Handle specific errors
     if (error.code === 'ER_DUP_ENTRY') {
+      console.error('🔴 Duplicate entry error');
       return res.status(400).json({ 
+        success: false,
         message: 'Asset number already exists. Please use a unique asset number.' 
       });
     }
 
-    res.status(500).json({ 
-      message: 'Server error',
-      error: error.message,
-      sqlMessage: error.sqlMessage
+    if (error.code === 'ER_NO_REFERENCED_ROW_2') {
+      console.error('🔴 Foreign key constraint error');
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid user reference. Please check assigned_to or created_by user.' 
+      });
+    }
+
+    // Return generic error
+    console.error('🔴 Returning generic error response');
+    return res.status(500).json({ 
+      success: false,
+      message: 'Failed to create asset',
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        code: error.code,
+        sqlMessage: error.sqlMessage
+      } : undefined
     });
   }
 };
-
 export const updateAsset = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
