@@ -78,11 +78,10 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ users table ready');
 
-    // ==================== HAPUS DAN RECREATE DEVICE_STOCKS TABLE ====================
-    console.log('⚠️ Dropping old device_stocks table...');
+    // ==================== PERBAIKI DEVICE_STOCKS TABLE ====================
+    console.log('🔄 Checking/Fixing device_stocks table...');
     await conn.query('DROP TABLE IF EXISTS device_stocks');
     
-    console.log('📦 Creating NEW device_stocks table with AUTO_INCREMENT...');
     await conn.query(`
       CREATE TABLE device_stocks (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -98,89 +97,48 @@ export const initDatabase = async (): Promise<void> => {
         INDEX idx_available (available_stock)
       ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
-    console.log('✅ NEW device_stocks table created with AUTO_INCREMENT');
+    console.log('✅ device_stocks table fixed with AUTO_INCREMENT');
 
-    // ==================== DEVICE_STOCK TABLE ====================
-    console.log('⚠️ Dropping old device_stock table...');
-    await conn.query('DROP TABLE IF EXISTS device_stock');
+    // ==================== PERBAIKI BORROWINGS TABLE (STRUKTUR LAMA) ====================
+    console.log('🔄 Checking/Fixing borrowings table (ORIGINAL STRUCTURE)...');
     
-    console.log('📦 Creating NEW device_stock table...');
-    await conn.query(`
-      CREATE TABLE device_stock (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        device_stocks_id INT NOT NULL,
-        serial_number VARCHAR(100) UNIQUE NOT NULL,
-        asset_tag VARCHAR(100),
-        status ENUM('available', 'borrowed', 'maintenance', 'retired', 'lost') DEFAULT 'available',
-        condition ENUM('excellent', 'good', 'fair', 'poor') DEFAULT 'good',
-        purchase_date DATE,
-        purchase_price DECIMAL(10,2),
-        warranty_expiry DATE,
-        notes TEXT,
-        last_maintenance_date DATE,
-        next_maintenance_date DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_device_stocks_id (device_stocks_id),
-        INDEX idx_serial_number (serial_number),
-        INDEX idx_status (status),
-        INDEX idx_condition (condition),
-        FOREIGN KEY (device_stocks_id) REFERENCES device_stocks(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB AUTO_INCREMENT=1
-    `);
-    console.log('✅ NEW device_stock table created');
+    // Cek dulu apakah tabel ada dan strukturnya benar
+    try {
+      const [columns]: any = await conn.query(`DESCRIBE borrowings`);
+      const idColumn = columns.find((col: any) => col.Field === 'id');
+      
+      // Jika kolom id tidak ada AUTO_INCREMENT, drop dan recreate
+      if (!idColumn || !idColumn.Extra?.includes('auto_increment')) {
+        console.log('⚠️  borrowings table has incorrect structure, dropping and recreating...');
+        await conn.query('DROP TABLE IF EXISTS borrowings');
+      }
+    } catch (e) {
+      console.log('ℹ️  borrowings table does not exist, creating new one...');
+    }
 
-    // ==================== HAPUS DAN RECREATE BORROWINGS TABLE ====================
-    console.log('⚠️ Dropping old borrowings table...');
-    await conn.query('DROP TABLE IF EXISTS borrowings');
-    
-    console.log('📦 Creating NEW borrowings table with AUTO_INCREMENT...');
+    // Buat tabel borrowings dengan struktur LAMA (seperti di file image.png)
     await conn.query(`
-      CREATE TABLE borrowings (
+      CREATE TABLE IF NOT EXISTS borrowings (
         id INT AUTO_INCREMENT PRIMARY KEY,
         employee_name VARCHAR(255) NOT NULL,
         device_id INT NOT NULL,
-        device_stock_id INT,
         device_name VARCHAR(255) NOT NULL,
-        serial_number VARCHAR(100),
         quantity INT NOT NULL DEFAULT 1,
         borrow_date DATE NOT NULL,
-        expected_return_date DATE,
-        actual_return_date DATE,
-        status ENUM('borrowed', 'returned', 'overdue', 'damaged', 'lost') DEFAULT 'borrowed',
-        condition_before ENUM('excellent', 'good', 'fair', 'poor'),
-        condition_after ENUM('excellent', 'good', 'fair', 'poor'),
-        notes TEXT,
+        return_date DATE,
+        status ENUM('borrowed', 'returned', 'overdue') DEFAULT 'borrowed',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_device_id (device_id),
-        INDEX idx_device_stock_id (device_stock_id),
         INDEX idx_status (status),
         INDEX idx_employee (employee_name),
         INDEX idx_borrow_date (borrow_date),
-        FOREIGN KEY (device_id) REFERENCES device_stocks(id) ON DELETE CASCADE,
-        FOREIGN KEY (device_stock_id) REFERENCES device_stock(id) ON DELETE SET NULL
+        FOREIGN KEY (device_id) REFERENCES device_stocks(id) ON DELETE CASCADE
       ) ENGINE=InnoDB AUTO_INCREMENT=1
     `);
-    console.log('✅ NEW borrowings table created with AUTO_INCREMENT');
+    console.log('✅ borrowings table ready (ORIGINAL STRUCTURE with AUTO_INCREMENT)');
 
-    // ==================== ASSETS TABLE ====================
-    console.log('📦 Creating assets table...');
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS assets (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        type VARCHAR(100) NOT NULL,
-        category VARCHAR(100) NOT NULL,
-        status VARCHAR(20) DEFAULT 'active',
-        value DECIMAL(10,2) DEFAULT 0.00,
-        location VARCHAR(255),
-        description TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB AUTO_INCREMENT=1
-    `);
-    console.log('✅ assets table ready');
+   
 
     // ==================== LIBRARY_ITEMS TABLE ====================
     console.log('📦 Creating library_items table...');
@@ -207,13 +165,13 @@ export const initDatabase = async (): Promise<void> => {
     console.log('✅ library_items table ready');
 
     // ==================== ACTIVITY_LOG TABLE ====================
-    console.log('📦 Creating/updating activity_log table...');
+    console.log('📦 Creating activity_log table...');
     await conn.query(`
       CREATE TABLE IF NOT EXISTS activity_log (
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT,
         action VARCHAR(255) NOT NULL,
-        entity_type ENUM('user', 'asset', 'library', 'device', 'device_stock', 'borrowing', 'system') DEFAULT 'user',
+        entity_type ENUM('user', 'asset', 'library', 'device', 'borrowing', 'system') DEFAULT 'user',
         entity_id INT,
         details LONGTEXT,
         ip_address VARCHAR(45),
@@ -226,41 +184,8 @@ export const initDatabase = async (): Promise<void> => {
     `);
     console.log('✅ activity_log table ready');
 
-    // ==================== MAINTENANCE_LOG TABLE ====================
-    console.log('📦 Creating maintenance_log table...');
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS maintenance_log (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        device_stock_id INT NOT NULL,
-        maintenance_type ENUM('routine', 'repair', 'upgrade', 'inspection') DEFAULT 'routine',
-        description TEXT NOT NULL,
-        cost DECIMAL(10,2),
-        performed_by VARCHAR(255),
-        performed_date DATE NOT NULL,
-        next_maintenance_date DATE,
-        notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_device_stock_id (device_stock_id),
-        INDEX idx_maintenance_date (performed_date),
-        FOREIGN KEY (device_stock_id) REFERENCES device_stock(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB AUTO_INCREMENT=1
-    `);
-    console.log('✅ maintenance_log table ready');
-
     // Enable foreign key checks kembali
     await conn.query('SET FOREIGN_KEY_CHECKS = 1');
-
-    // ==================== PERBAIKI ENUM ACTIVITY_LOG ====================
-    console.log('🔧 Ensuring activity_log enum contains all values...');
-    try {
-      await conn.query(`
-        ALTER TABLE activity_log 
-        MODIFY COLUMN entity_type ENUM('user', 'asset', 'library', 'device', 'device_stock', 'borrowing', 'system') DEFAULT 'user'
-      `);
-      console.log('✅ activity_log enum values updated');
-    } catch (e: any) {
-      console.log('ℹ️  activity_log enum already correct or could not be modified:', e.message);
-    }
 
     // ==================== CREATE ADMIN USER ====================
     console.log('👑 Checking admin user...');
@@ -275,57 +200,57 @@ export const initDatabase = async (): Promise<void> => {
       console.log('✅ Admin user created');
     }
 
-    // ==================== TEST INSERT BORROWINGS ====================
+    // ==================== VERIFIKASI TABEL BORROWINGS ====================
+    console.log('\n🔍 Verifying borrowings table structure...');
+    try {
+      const [columns]: any = await conn.query(`DESCRIBE borrowings`);
+      console.log(`📊 borrowings table has ${columns.length} columns:`);
+      
+      for (const col of columns) {
+        console.log(`   ${col.Field}: ${col.Type} ${col.Null === 'NO' ? 'NOT NULL' : ''} ${col.Extra || ''}`);
+      }
+      
+      const idColumn = columns.find((col: any) => col.Field === 'id');
+      if (idColumn?.Extra?.includes('auto_increment')) {
+        console.log('✅ borrowings.id has AUTO_INCREMENT ✓');
+      } else {
+        console.log('❌ borrowings.id does NOT have AUTO_INCREMENT');
+      }
+    } catch (e) {
+      console.log('⚠️  Could not verify borrowings table');
+    }
+
+    // ==================== TEST INSERT KE BORROWINGS ====================
     console.log('\n🧪 Testing borrowings insertion...');
     try {
       // Buat test device terlebih dahulu
       const [deviceResult]: any = await conn.query(
         'INSERT INTO device_stocks (name, category, total_stock, available_stock, borrowed_count) VALUES (?, ?, ?, ?, ?)',
-        ['Test Mouse', 'Mouse', 10, 10, 0]
+        ['Dell Keyboard', 'Keyboard', 5, 5, 0]
       );
-      
       const deviceId = deviceResult.insertId;
       
-      // Test insert borrowings
+      // Test insert ke borrowings (struktur lama)
       const [borrowResult]: any = await conn.query(
         `INSERT INTO borrowings 
-         (employee_name, device_id, device_name, quantity, borrow_date, expected_return_date, status) 
+         (employee_name, device_id, device_name, quantity, borrow_date, return_date, status) 
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        ['John Doe', deviceId, 'Test Mouse', 1, '2025-12-27', '2025-12-28', 'borrowed']
+        ['Jane Smith', deviceId, 'Dell Keyboard', 1, '2025-12-27', '2025-12-28', 'borrowed']
       );
       
-      console.log(`✅ Test borrowing inserted successfully! Insert ID: ${borrowResult.insertId}`);
+      console.log(`✅ borrowings test: Insert ID = ${borrowResult.insertId} ✓`);
       
-      // Update device stock
-      await conn.query(
-        'UPDATE device_stocks SET borrowed_count = borrowed_count + 1, available_stock = available_stock - 1 WHERE id = ?',
-        [deviceId]
-      );
-      
-      console.log('✅ Device stock updated after borrowing');
+      // Verifikasi data yang diinsert
+      const [borrowData]: any = await conn.query('SELECT * FROM borrowings WHERE id = ?', [borrowResult.insertId]);
+      console.log(`📋 Test borrowing data: ${JSON.stringify(borrowData[0])}`);
       
     } catch (error: any) {
       console.error(`❌ Test borrowing insertion failed: ${error.message}`);
       if (error.sql) console.error(`SQL: ${error.sql}`);
     }
 
-    // ==================== VERIFIKASI ALL TABLES ====================
-    console.log('\n🔍 Verifying all table structures...');
-    const tables = ['users', 'device_stocks', 'device_stock', 'borrowings', 'assets', 'library_items', 'activity_log', 'maintenance_log'];
-    
-    for (const table of tables) {
-      try {
-        const [columns]: any = await conn.query(`DESCRIBE ${table}`);
-        const idColumn = columns.find((col: any) => col.Field === 'id');
-        const hasAutoIncrement = idColumn?.Extra?.includes('auto_increment') || false;
-        console.log(`📊 ${table}.id: AUTO_INCREMENT=${hasAutoIncrement ? '✅' : '❌'}`);
-      } catch (e) {
-        console.log(`⚠️  Could not verify ${table} table`);
-      }
-    }
-
-    console.log('\n🎉 ALL DATABASE TABLES REINITIALIZED SUCCESSFULLY!');
-    console.log('⚠️  NOTE: Previous data in device_stocks, device_stock, and borrowings has been cleared.');
+    console.log('\n🎉 DATABASE INITIALIZATION COMPLETE!');
+    console.log('✅ device_stocks and borrowings tables now have AUTO_INCREMENT');
 
   } catch (error: any) {
     console.error('❌ Database initialization error:', error.message);
